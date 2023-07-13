@@ -51,15 +51,9 @@ int height = 800;
 int main(int argc, char** argv) {
     startTimeString = currentTimeString();
 
-    if (argc < 2) {
-        printf("Usage: %s SCENEFILE.txt\n", argv[0]);
-        return 1;
-    }
+    if (argc == 2) {
+      const char* startScene = argv[1];
 
-    const char *startScene = argv[1];
-
-    //// Load scene file
-    if (startScene) {
       loadScene(startScene);
       lastSceneFile = ui_sceneFile = startScene;
     }
