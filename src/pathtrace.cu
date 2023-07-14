@@ -22,7 +22,7 @@
 #define TIMING 0
 #define ERRORCHECK 1
 #define CACHE_FIRST_BOUNCE 1
-#define RAY_SORTING 1
+#define RAY_SORTING 0
 #define USE_GBUFFER 1
 #define COMPACT_GBUFFER 0
 
@@ -440,7 +440,6 @@ __global__ void shadeBSDF(
       pathSegment.color = Color(0.0f);
       pathSegment.remainingBounces = 0;
     }
-
   }
 }
 
@@ -649,9 +648,6 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
 #endif
 
       if (intersections == NULL) {
-        // Clean shading chunks
-        cudaMemset(dev_intersections, 0, num_paths * sizeof(ShadeableIntersection));
-
         computeIntersections << <numblocksPathSegmentTracing, blockSize1d >> > (
           depth
           , num_paths
@@ -663,7 +659,6 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
           , dev_intersections
           );
         checkCUDAError("trace one bounce");
-        cudaDeviceSynchronize();
 
 #if CACHE_FIRST_BOUNCE
         // NOTE: Copy before sorting since dev_first_intersections should map to unsorted dev_paths
@@ -679,7 +674,7 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
         intersections = dev_intersections;
       }
 
-      if (depth == 0) {
+      if (denoise && depth == 0) {
         generateGBuffer<<<numblocksPathSegmentTracing, blockSize1d>>> (num_paths, intersections, dev_paths, dev_gBuffer, cam.viewMat);
       }
 
@@ -733,7 +728,8 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
     // Assemble this iteration and apply it to the image
     dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
     finalGather<<<numBlocksPixels, blockSize1d>>>(N, dev_image, dev_final_paths);
-
+    checkCUDAError("pathtrace");
+    
     // Reset dev_paths to point to first element
     dev_paths = dev_final_paths;  
 
@@ -754,15 +750,10 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
         }
       }
 
-      cudaMemcpy(hst_scene->state.image.data(), dev_denoised_image,
-        pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToHost);
-    }
-    else {
-      cudaMemcpy(hst_scene->state.image.data(), dev_image,
-        pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToHost);
+      cudaMemcpy(dev_image, dev_denoised_image, pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
     }
 
-    checkCUDAError("pathtrace");
+
 }
 
 

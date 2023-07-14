@@ -212,6 +212,8 @@ void drawGui(int windowWidth, int windowHeight) {
       ui_hide = !ui_hide;
     }
 
+    ImGui::Text("Avg: %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+
     if (ImGui::CollapsingHeader("Render Settings")) {
       // open Dialog Simple
       if (ImGui::Button("Change Scene"))

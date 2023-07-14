@@ -9,7 +9,7 @@
  * Computes a cosine-weighted random direction in a hemisphere.
  * Used for diffuse lighting.
  */
-__host__ __device__
+__device__
 glm::vec3 calculateRandomDirectionInHemisphere(
     glm::vec3 normal, thrust::default_random_engine &rng) {
     thrust::uniform_real_distribution<float> u01(0, 1);
@@ -38,16 +38,20 @@ glm::vec3 calculateRandomDirectionInHemisphere(
     glm::vec3 perpendicularDirection2 =
         glm::normalize(glm::cross(normal, perpendicularDirection1));
 
+
+    float c, s;
+    __sincosf(around, &s, &c);
+
     return up * normal
-        + cos(around) * over * perpendicularDirection1
-        + sin(around) * over * perpendicularDirection2;
+        + c * over * perpendicularDirection1
+        + s * over * perpendicularDirection2;
 }
 
 /**
  * Computes the imperfect specular ray direction.
  * Based on: https://developer.nvidia.com/gpugems/gpugems3/part-iii-rendering/chapter-20-gpu-based-importance-sampling
  */
-__host__ __device__
+__device__
 glm::vec3 calculateImperfectSpecularDirection(
     glm::vec3 normal, glm::vec3 reflect, glm::vec4 tangent,
     thrust::default_random_engine& rng, 
@@ -55,15 +59,15 @@ glm::vec3 calculateImperfectSpecularDirection(
    
     thrust::uniform_real_distribution<float> u01(0,1);
     float x1 = u01(rng);
-    float x2 = u01(rng);
-  
-    float theta = atan(roughness * sqrt(x1) / sqrt(1 - x1));
-    float phi = 2 * PI * x2;
-  
+
+    float sp, cp, st, ct;
+    __sincosf(2 * PI * u01(rng), &sp, &cp);
+    __sincosf(atan2f(roughness * sqrtf(x1), sqrtf(1-x1)), &st, &ct);
+
     glm::vec3 dir;
-    dir.x = cos(phi) * sin(theta);
-    dir.y = sin(phi) * sin(theta);
-    dir.z = cos(theta);
+    dir.x = cp * st;
+    dir.y = sp * st;
+    dir.z = ct;
     
     glm::mat3 worldToLocal;
     worldToLocal[2] = normal;
