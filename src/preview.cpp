@@ -214,6 +214,10 @@ void drawGui(int windowWidth, int windowHeight) {
 
     ImGui::Text("Avg: %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
+    size_t free, total;
+    cudaMemGetInfo(&free, &total);
+    ImGui::Text("Free Mem: %.1f/%.1f GB", free/1000000000.0f, total/1000000000.0f);
+
     if (ImGui::CollapsingHeader("Render Settings")) {
       // open Dialog Simple
       if (ImGui::Button("Change Scene"))
@@ -226,7 +230,6 @@ void drawGui(int windowWidth, int windowHeight) {
         if (ImGuiFileDialog::Instance()->IsOk())
         {
           ui_sceneFile = ImGuiFileDialog::Instance()->GetFilePathName();
-          //std::string filePath = ImGuiFileDialog::Instance()->GetCurrentPath();
         }
 
         // close

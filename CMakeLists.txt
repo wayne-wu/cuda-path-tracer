@@ -69,6 +69,7 @@ set(headers
     src/interactions.h
     src/intersections.h
     src/glslUtility.hpp
+    src/octree.h
     src/pathtrace.h
     src/scene.h
     src/sceneStructs.h
@@ -81,6 +82,7 @@ set(sources
     src/stb.cpp
     src/image.cpp
     src/glslUtility.cpp
+    src/octree.cpp
     src/pathtrace.cu
     src/scene.cpp
     src/preview.cpp

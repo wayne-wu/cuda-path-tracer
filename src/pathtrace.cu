@@ -229,6 +229,13 @@ void pathtraceInit(Scene *scene) {
     for (int i = 0; i < scene->textures.size(); i++)
       textureInit(scene->textures[i], i);
 
+    // Octree
+    mallocAndCopy<int>(dev_prim_data.binChildIndices, scene->binChildIndices);
+    mallocAndCopy<int>(dev_prim_data.binStartIndices, scene->binStartIndices);
+    mallocAndCopy<int>(dev_prim_data.binEndIndices, scene->binEndIndices);
+    mallocAndCopy<Vec3>(dev_prim_data.binCorners, scene->binCorners);
+    mallocAndCopy<int>(dev_prim_data.faceBins, scene->faceBins);
+
 #if CACHE_FIRST_BOUNCE
     cudaMalloc(&dev_first_intersections, pixelcount * sizeof(ShadeableIntersection));
     cudaMemset(dev_first_intersections, 0, pixelcount * sizeof(ShadeableIntersection));
@@ -384,7 +391,7 @@ __global__ void computeIntersections(
             }
         }
 
-        ShadeableIntersection& intersection = intersections[path_index];
+        ShadeableIntersection intersection;
         if (hit_geom_index == -1)
         {
             intersection.t = -1.0f;
@@ -398,6 +405,8 @@ __global__ void computeIntersections(
             intersection.uv = uv;
             intersection.tangent = tangent;
         }
+
+        intersections[path_index] = intersection;
     }
 }
 
@@ -412,7 +421,8 @@ __global__ void shadeBSDF(
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < num_paths) {
     ShadeableIntersection intersection = shadeableIntersections[idx];
-    PathSegment& pathSegment = pathSegments[idx];
+    PathSegment pathSegment = pathSegments[idx];
+    
     if (intersection.t > 0.0f) {
 
       thrust::default_random_engine rng = makeSeededRandomEngine(iter, idx, 0);
@@ -440,6 +450,8 @@ __global__ void shadeBSDF(
       pathSegment.color = Color(0.0f);
       pathSegment.remainingBounces = 0;
     }
+
+    pathSegments[idx] = pathSegment;
   }
 }
 
@@ -622,7 +634,7 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
             (cam.resolution.y + blockSize2d.y - 1) / blockSize2d.y);
 
     // 1D block for path tracing
-    const int blockSize1d = 128;
+    const size_t blockSize1d = 128;
 
     generateRayFromCamera <<<blocksPerGrid2d, blockSize2d >>>(cam, iter, traceDepth, dev_paths);
     checkCUDAError("generate camera ray");

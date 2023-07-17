@@ -53,6 +53,20 @@ Scene::Scene(string filename) {
         }
     }
 
+    cout << "\nConstructing Octrees ..." << endl;
+    // TODO: Maybe find a better way to insert these elements
+    for (auto& prim : primitives) {
+      Octree oct(prim, mesh_vertices, mesh_indices);
+      prim.bin_offset = binChildIndices.size();
+      binChildIndices.insert(binChildIndices.end(), oct.binChildIndices.begin(), oct.binChildIndices.end());
+      binStartIndices.insert(binStartIndices.end(), oct.binStartIndices.begin(), oct.binStartIndices.end());
+      binEndIndices.insert(binEndIndices.end(), oct.binEndIndices.begin(), oct.binEndIndices.end());
+      binCorners.insert(binCorners.end(), oct.binCorners.begin(), oct.binCorners.end());
+      faceBins.insert(faceBins.end(), oct.triBins.begin(), oct.triBins.end());
+    }
+    cout << "Octrees completed." << endl << endl;
+
+
     std::random_device rd;
     std::default_random_engine eng(rd());
     std::uniform_real_distribution<float> u01(0.f, 1.f);
@@ -418,6 +432,7 @@ int Scene::loadGLTF(const std::string& filename, float scale) {
 
               // Store mesh vertices
               prim.v_offset = mesh_vertices.size();
+              prim.num_vertices = attribAccessor.count;
               for (int i = 0; i < attribAccessor.count; i++) {
                 glm::vec3 v;
                 int idx = i * offset;

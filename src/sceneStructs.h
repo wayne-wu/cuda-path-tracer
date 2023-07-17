@@ -10,7 +10,18 @@
 #define NEAR 1.f
 #define FAR 50.f
 
+
+typedef int Offset;
+
+typedef glm::vec2 Vec2;
+typedef glm::vec3 Vec3;
+typedef glm::vec4 Vec4;
+
 typedef glm::vec3 Color;
+typedef uint16_t Index;
+
+typedef std::vector<Vec3> Vertices;
+typedef std::vector<Index> Indices;
 
 enum GeomType {
     SPHERE,
@@ -29,12 +40,15 @@ struct Mesh {
 };
 
 struct Primitive {
+    // number of points
     int count;
-    int i_offset;
-    int v_offset;
-    int n_offset = -1;
-    int uv_offset = -1;
-    int t_offset = -1;
+    int num_vertices;
+    Offset i_offset;
+    Offset v_offset;
+    Offset bin_offset = -1;
+    Offset n_offset = -1;
+    Offset uv_offset = -1;
+    Offset t_offset = -1;
     int mat_id;
     glm::vec3 bbox_max;
     glm::vec3 bbox_min;
@@ -49,6 +63,13 @@ struct PrimData {
     glm::vec2* uvs;
     glm::vec4* tangents;
 
+    //octree
+    Vec3* binCorners;
+    int* binStartIndices;
+    int* binEndIndices;
+    int* binChildIndices;
+    int* faceBins;
+
     void free() {
       cudaFree(primitives);
       cudaFree(vertices);
@@ -56,6 +77,12 @@ struct PrimData {
       cudaFree(indices);
       cudaFree(uvs);
       cudaFree(tangents);
+
+      cudaFree(binCorners);
+      cudaFree(binStartIndices);
+      cudaFree(binEndIndices);
+      cudaFree(binChildIndices);
+      cudaFree(faceBins);
     }
 };
 

@@ -7,6 +7,7 @@
 #include "glm/glm.hpp"
 #include "utilities.h"
 #include "sceneStructs.h"
+#include "octree.h"
 
 #include "tiny_gltf.h"
 
@@ -33,11 +34,17 @@ public:
     std::vector<Primitive> primitives;
 
     // Primitive Data
-    std::vector<uint16_t>  mesh_indices;
-    std::vector<glm::vec3> mesh_vertices;
-    std::vector<glm::vec3> mesh_normals;
-    std::vector<glm::vec2> mesh_uvs;
-    std::vector<glm::vec4> mesh_tangents;
+    Indices  mesh_indices;
+    Vertices mesh_vertices;
+    std::vector<Vec3> mesh_normals;
+    std::vector<Vec2> mesh_uvs;
+    std::vector<Vec4> mesh_tangents;
+
+    std::vector<int> binChildIndices;
+    std::vector<int> binStartIndices;
+    std::vector<int> binEndIndices;
+    std::vector<Vec3> binCorners;
+    std::vector<int> faceBins;
 
     RenderState state;
 };
