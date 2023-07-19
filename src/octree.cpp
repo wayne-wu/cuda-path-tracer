@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numeric>
 #include <iostream>
+#include <unordered_set>
 
 #include "octree.h"
 
@@ -58,14 +59,14 @@ void Octree::divide() {
           binDepths.push_back(depth);
           binChildIndices.push_back(-1);
 
-          binCorners.emplace_back(binMin + glm::vec3(i, j, k) * cellSize);
-          const glm::vec3& minCorner = binCorners.back();
-          binCorners.emplace_back(minCorner + cellSize);
-          const glm::vec3& maxCorner = binCorners.back();
+          const glm::vec3 minCorner = binMin + glm::vec3(i, j, k) * cellSize;
+          binCorners.push_back(minCorner);
+          const glm::vec3 maxCorner = minCorner + cellSize;
+          binCorners.push_back(maxCorner);
 
           vector<int> facesInBin;
 
-          for (int faceIdx : binFaces[b]) {
+          for (auto& faceIdx : binFaces[b]) {
             // If any of the three points of a triangle is within the bin,
             // then the whole triangle is part of the bin
             int n = _prim.i_offset + 3 * faceIdx;
@@ -105,4 +106,7 @@ void Octree::divide() {
     }
   }
 
+  unordered_set<int> binnedFaces(faceBins.begin(), faceBins.end());
+  // Assert that all faces are part of a bin
+  assert(binnedFaces.size() == numFaces);
 }

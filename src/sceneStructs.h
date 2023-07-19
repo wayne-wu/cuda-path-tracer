@@ -47,6 +47,7 @@ struct Primitive {
     Offset i_offset;
     Offset v_offset;
     Offset bin_offset = -1;
+    Offset bf_offset = -1;
     Offset n_offset = -1;
     Offset uv_offset = -1;
     Offset t_offset = -1;

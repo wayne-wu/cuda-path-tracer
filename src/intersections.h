@@ -230,6 +230,9 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
         continue;
 
       if (m.bin_offset >= 0) {
+
+        const Offset& bo = m.bin_offset;
+
         // Use octree for intersection testing
         int stack[64];
         int* stackPtr = stack;
@@ -239,17 +242,17 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
 
         do {
 
-          glm::vec3 minCorner = md.binCorners[2 * bin];
-          glm::vec3 maxCorner = md.binCorners[2 * bin + 1];
+          glm::vec3 minCorner = md.binCorners[bo + 2 * bin];
+          glm::vec3 maxCorner = md.binCorners[bo + 2 * bin + 1];
           if (intersectBox(r, minCorner, maxCorner)) {
             // Check if the current bin is leaf
-            if (md.binChildIndices[bin] == -1) {
-              int startIdx = md.binStartIndices[bin];
-              int endIdx = md.binEndIndices[bin];
+            if (md.binChildIndices[bo + bin] == -1) {
+              int startIdx = md.binStartIndices[bo + bin];
+              int endIdx = md.binEndIndices[bo + bin];
 
               if (startIdx >= 0) {
                 for (int b = startIdx; b < endIdx; ++b) {
-                  int faceIdx = md.faceBins[b];
+                  int faceIdx = md.faceBins[m.bf_offset + b];
                   if (intersectFace(md, m, r, faceIdx, bary) && bary.z < hitBary.z) {
                     hitPrim = primId;
                     hitFace = faceIdx;
@@ -259,7 +262,7 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
               }
             }
             else {
-              int childBin = md.binChildIndices[bin];
+              int childBin = md.binChildIndices[bo + bin];
               for (int i = childBin; i < childBin + 8; ++i) {
                 *stackPtr++ = i;  // push children bins to stack
               }

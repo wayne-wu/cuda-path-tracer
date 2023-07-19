@@ -22,7 +22,7 @@ private:
 
   int minBinCount = 20;
   int maxDepth = 10;
-  float minCellsize = 0.1f;
+  float minCellsize = 0.05f;
 
 public:
   Octree::Octree(const Primitive& prim, const Vertices& vertices, const Indices& indices);
