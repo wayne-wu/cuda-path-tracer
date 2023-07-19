@@ -17,6 +17,7 @@ __host__ __device__ inline void swapVal(float& v1, float& v2) {
 
 /**
  * Interpolate a vector given three vectors and a barycentric coordinate (uv)
+ * TODO: Fast lerp: https://developer.nvidia.com/blog/lerp-faster-cuda/ 
  */
 template<class T>
 __host__ __device__ inline void lerp(T& p, const T& a, 
@@ -63,7 +64,7 @@ __host__ __device__ glm::vec3 multiplyMV(glm::mat4 m, glm::vec4 v) {
  * @param outside            Output param for whether the ray came from outside.
  * @return                   Ray parameter `t` value. -1 if no intersection.
  */
-__host__ __device__ float boxIntersectionTest(Geom box, Ray r,
+__host__ __device__ float boxIntersectionTest(Geom& box, Ray& r,
         glm::vec3 &intersectionPoint, glm::vec3 &normal, bool &outside) {
     Ray q;
     q.origin    =                multiplyMV(box.inverseTransform, glm::vec4(r.origin   , 1.0f));
@@ -117,7 +118,7 @@ __host__ __device__ float boxIntersectionTest(Geom box, Ray r,
  * @param outside            Output param for whether the ray came from outside.
  * @return                   Ray parameter `t` value. -1 if no intersection.
  */
-__host__ __device__ float sphereIntersectionTest(Geom sphere, Ray r,
+__host__ __device__ float sphereIntersectionTest(Geom& sphere, Ray& r,
         glm::vec3 &intersectionPoint, glm::vec3 &normal, bool &outside) {
     float radius = .5;
 
@@ -207,9 +208,8 @@ __host__ __device__ bool intersectFace(const PrimData& md, const Primitive& m, c
 /**
  * Test intersection between a ray and a mesh
  */
-__host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md, Ray r,
-    glm::vec3& intersectionPoint, glm::vec3& normal, glm::vec2& uv, glm::vec4& tangent, int& materialid) {
-  
+__host__ __device__ bool meshIntersectionTest(Geom& geom, Mesh& mesh, PrimData& md, Ray& r, ShadeableIntersection& intersection){
+
     Vec3 rayOrigin = r.origin;
 
     r.origin = multiplyMV(geom.inverseTransform, glm::vec4(r.origin, 1.0f));
@@ -219,7 +219,7 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
     int hitPrim = -1;
     int hitFace = -1;
     glm::vec3 hitBary, bary;
-    hitBary.z = FLT_MAX;
+    hitBary.z = intersection.t;  // FLT_MAX
 
     for (int primId = 0; primId < mesh.prim_count; primId++) {
 
@@ -287,6 +287,7 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
       }
     }
 
+    // TODO: Reduce divergence. Maybe move everything below to a new kernel after compaction?
     if (hitPrim >= 0) {
 
       const Primitive m = md.primitives[mesh.prim_offset + hitPrim];
@@ -302,11 +303,10 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
 
       // Interpolate Normal
       if (m.n_offset >= 0) {
-        glm::vec3 n0, n1, n2;
-        n0 = md.normals[m.n_offset + f0];
-        n1 = md.normals[m.n_offset + f1];
-        n2 = md.normals[m.n_offset + f2];
-        lerp<glm::vec3>(normal, n0, n1, n2, hitBary.x, hitBary.y);
+        lerp<glm::vec3>(intersection.surfaceNormal, 
+          md.normals[m.n_offset + f0], 
+          md.normals[m.n_offset + f1], 
+          md.normals[m.n_offset + f2], hitBary.x, hitBary.y);
       }
 
       // Interpolate UV
@@ -315,16 +315,16 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
         uv0 = md.uvs[m.uv_offset + f0];
         uv1 = md.uvs[m.uv_offset + f1];
         uv2 = md.uvs[m.uv_offset + f2];
-        lerp<glm::vec2>(uv, uv0, uv1, uv2, hitBary.x, hitBary.y);
+        lerp<glm::vec2>(intersection.uv, uv0, uv1, uv2, hitBary.x, hitBary.y);
       }
 
       // Interpolate Tangent
-      glm::vec4 t0, t1, t2;
       if (m.t_offset >= 0) {
-        t0 = md.tangents[m.t_offset + f0];
-        t1 = md.tangents[m.t_offset + f1];
-        t2 = md.tangents[m.t_offset + f2];
-        lerp<glm::vec4>(tangent, t0, t1, t2, hitBary.x, hitBary.y);
+        lerp<glm::vec4>(intersection.tangent, 
+          md.tangents[m.t_offset + f0], 
+          md.tangents[m.t_offset + f1], 
+          md.tangents[m.t_offset + f2], 
+          hitBary.x, hitBary.y);
       }
       else {
         // Calculate tangent vector: 
@@ -341,19 +341,22 @@ __host__ __device__ float meshIntersectionTest(Geom geom, Mesh mesh, PrimData md
         glm::vec3 tdir((du1.x * dp2.x - du2.x * dp1.x) * r, (du1.x * dp2.y - du2.x * dp1.y) * r,
           (du1.x * dp2.z - du2.x * dp1.z) * r);
 
-        tangent = glm::vec4(
-          glm::normalize(sdir - normal * glm::dot(normal, sdir)),
-          glm::dot(glm::cross(normal, sdir), tdir) < 0.f ? -1.f : 1.f);
+        intersection.tangent = glm::vec4(
+          glm::normalize(sdir - intersection.surfaceNormal * glm::dot(intersection.surfaceNormal, sdir)),
+          glm::dot(glm::cross(intersection.surfaceNormal, sdir), tdir) < 0.f ? -1.f : 1.f);
       }
 
-      materialid = m.mat_id;
+      intersection.surfaceNormal = glm::normalize(
+        multiplyMV(geom.invTranspose, glm::vec4(intersection.surfaceNormal, 1.f)));
+      intersection.tangent = glm::vec4(glm::normalize(
+        multiplyMV(geom.invTranspose, intersection.tangent)), intersection.tangent.z);
+
+      intersection.materialId = m.mat_id;
+
+      intersection.t = glm::length(rayOrigin - multiplyMV(geom.transform, glm::vec4(getPointOnRay(r, hitBary.z), 1.f)));
+
+      return true;
     }
 
-    glm::vec3 objspaceIntersection = getPointOnRay(r, hitBary.z);
-    intersectionPoint = multiplyMV(geom.transform, glm::vec4(objspaceIntersection, 1.f));
-
-    normal = glm::normalize(multiplyMV(geom.invTranspose, glm::vec4(normal, 1.f)));
-    tangent = glm::vec4(glm::normalize(multiplyMV(geom.invTranspose, tangent)), tangent.z);
-
-    return glm::length(rayOrigin - intersectionPoint);;
+    return false;
 }

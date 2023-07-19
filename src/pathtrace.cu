@@ -339,72 +339,47 @@ __global__ void computeIntersections(
         PathSegment pathSegment = pathSegments[path_index];
 
         float t;
-        glm::vec3 intersect_point;
-        glm::vec3 normal;
-        glm::vec2 uv;
-        glm::vec4 tangent;
-        int materialId = -1;
-        float t_min = FLT_MAX;
+        ShadeableIntersection intersection;
+        intersection.t = FLT_MAX;
+        bool hit = false;
         int hit_geom_index = -1;
         bool outside = true;
 
         // TODO: Maybe just create a temp ShadeableIntersection object
         glm::vec3 tmp_intersect;
-        glm::vec3 tmp_normal;
-        glm::vec2 tmp_uv;
-        glm::vec4 tmp_tangent;
-        int tmp_materialId = -1;
 
         // naive parse through global geoms
-
         for (int i = 0; i < geoms_size; i++)
         {
             Geom & geom = geoms[i];
 
             if (geom.type == CUBE)
             {
-                t = boxIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, outside);
-                tmp_materialId = geom.materialid;
+                t = boxIntersectionTest(geom, pathSegment.ray, tmp_intersect, intersection.surfaceNormal, outside);
+                if (t > 0.f && t < intersection.t) {
+                  intersection.t = t;
+                  intersection.materialId = geom.materialid;
+                  hit = true;
+                }
             }
             else if (geom.type == SPHERE)
             {
-                t = sphereIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, outside);
-                tmp_materialId = geom.materialid;
+                t = sphereIntersectionTest(geom, pathSegment.ray, tmp_intersect, intersection.surfaceNormal, outside);
+                if (t > 0.f && t < intersection.t) {
+                  intersection.t = t;
+                  intersection.materialId = geom.materialid;
+                  hit = true;
+                }
             }
             else if (geom.type == MESH)
             {
-                t = meshIntersectionTest(geom, meshes[geom.meshid], mesh_data, pathSegment.ray, tmp_intersect, tmp_normal, tmp_uv, tmp_tangent, tmp_materialId);
+                hit |= meshIntersectionTest(geom, meshes[geom.meshid], mesh_data, pathSegment.ray, intersection);
             }
             // TODO: add more intersection tests here... triangle? metaball? CSG?
 
-            // Compute the minimum t from the intersection tests to determine what
-            // scene geometry object was hit first.
-            if (t > 0.0f && t_min > t)
-            {
-                t_min = t;
-                hit_geom_index = i;
-                materialId = tmp_materialId;
-                intersect_point = tmp_intersect;
-                normal = tmp_normal;
-                uv = tmp_uv;
-                tangent = tmp_tangent;
-            }
         }
 
-        ShadeableIntersection intersection;
-        if (hit_geom_index == -1)
-        {
-            intersection.t = -1.0f;
-        }
-        else
-        {
-            //The ray hits something
-            intersection.t = t_min;
-            intersection.materialId = materialId;
-            intersection.surfaceNormal = normal;
-            intersection.uv = uv;
-            intersection.tangent = tangent;
-        }
+        intersection.t = hit ? intersection.t : -1.f;
 
         intersections[path_index] = intersection;
     }
