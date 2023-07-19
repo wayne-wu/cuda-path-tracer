@@ -3,6 +3,7 @@
 #include <vector>
 #include "glm/glm.hpp"
 
+#include "utilities.h"
 #include "sceneStructs.h"
 
 
@@ -11,11 +12,12 @@ using namespace std;
 class Octree {
   
 private:
-  void divide(int bin);
+  void divide();
 
   // TODO: Figure out the best way to pass in scene data
   const Primitive& _prim;
   const Vertices& _vertices;
+
   const Indices& _indices;
 
   int minBinCount = 20;
@@ -27,7 +29,6 @@ public:
   Octree::~Octree() {};
 
   vector<int> binDepths;
-  vector<int> binParents;
 
   // Stores the min and max corners for a bin
   vector<glm::vec3> binCorners;
@@ -39,5 +40,5 @@ public:
   vector<int> binEndIndices;
 
   // Stores the bin number for all vertices (all triangles)
-  vector<int> triBins;
+  vector<int> faceBins;
 };

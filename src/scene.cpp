@@ -62,7 +62,7 @@ Scene::Scene(string filename) {
       binStartIndices.insert(binStartIndices.end(), oct.binStartIndices.begin(), oct.binStartIndices.end());
       binEndIndices.insert(binEndIndices.end(), oct.binEndIndices.begin(), oct.binEndIndices.end());
       binCorners.insert(binCorners.end(), oct.binCorners.begin(), oct.binCorners.end());
-      faceBins.insert(faceBins.end(), oct.triBins.begin(), oct.triBins.end());
+      faceBins.insert(faceBins.end(), oct.faceBins.begin(), oct.faceBins.end());
     }
     cout << "Octrees completed." << endl << endl;
 
