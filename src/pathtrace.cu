@@ -230,11 +230,8 @@ void pathtraceInit(Scene *scene) {
       textureInit(scene->textures[i], i);
 
     // Octree
-    mallocAndCopy<int>(dev_prim_data.binChildIndices, scene->binChildIndices);
-    mallocAndCopy<int>(dev_prim_data.binStartIndices, scene->binStartIndices);
-    mallocAndCopy<int>(dev_prim_data.binEndIndices, scene->binEndIndices);
-    mallocAndCopy<Vec3>(dev_prim_data.binCorners, scene->binCorners);
-    mallocAndCopy<int>(dev_prim_data.faceBins, scene->faceBins);
+    mallocAndCopy<Bin>(dev_prim_data.bins, scene->bins);
+    mallocAndCopy<int>(dev_prim_data.binFaces, scene->faceBins);
 
 #if CACHE_FIRST_BOUNCE
     cudaMalloc(&dev_first_intersections, pixelcount * sizeof(ShadeableIntersection));

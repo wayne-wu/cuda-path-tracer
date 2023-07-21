@@ -20,24 +20,17 @@ private:
 
   const Indices& _indices;
 
-  int minBinCount = 20;
+  int minBinCount = 100;
   int maxDepth = 10;
-  float minCellsize = 0.05f;
+  float minCellsize = 0.01f;
 
 public:
   Octree::Octree(const Primitive& prim, const Vertices& vertices, const Indices& indices);
   Octree::~Octree() {};
 
-  vector<int> binDepths;
 
-  // Stores the min and max corners for a bin
-  vector<glm::vec3> binCorners;
-  // Stores the starting index for the child of a bin.
-  // -1 if the bin is a leaf node
-  vector<int> binChildIndices;
-  
-  vector<int> binStartIndices;
-  vector<int> binEndIndices;
+  vector<Bin> bins;
+
 
   // Stores the bin number for all vertices (all triangles)
   vector<int> faceBins;

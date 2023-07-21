@@ -40,10 +40,7 @@ public:
     std::vector<Vec2> mesh_uvs;
     std::vector<Vec4> mesh_tangents;
 
-    std::vector<int> binChildIndices;
-    std::vector<int> binStartIndices;
-    std::vector<int> binEndIndices;
-    std::vector<Vec3> binCorners;
+    std::vector<Bin> bins;
     std::vector<int> faceBins;
 
     RenderState state;

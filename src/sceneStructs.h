@@ -57,6 +57,16 @@ struct Primitive {
     glm::mat4 pivot_xform;
 };
 
+struct Bin {
+    Vec3 bbox_min;  // 3
+    Vec3 bbox_max;  // 3
+    int childIndex; // 1
+    int startIndex; // 1
+    int endIndex;   // 1
+    int depth;      // 1
+    Vec2 padding;   // 3
+};
+
 struct PrimData {
     Primitive* primitives;
     glm::vec3* vertices;
@@ -66,11 +76,8 @@ struct PrimData {
     glm::vec4* tangents;
 
     //octree
-    Vec3* binCorners;
-    int* binStartIndices;
-    int* binEndIndices;
-    int* binChildIndices;
-    int* faceBins;
+    Bin* bins;
+    int* binFaces;
 
     void free() {
       cudaFree(primitives);
@@ -80,11 +87,8 @@ struct PrimData {
       cudaFree(uvs);
       cudaFree(tangents);
 
-      cudaFree(binCorners);
-      cudaFree(binStartIndices);
-      cudaFree(binEndIndices);
-      cudaFree(binChildIndices);
-      cudaFree(faceBins);
+      cudaFree(bins);
+      cudaFree(binFaces);
     }
 };
 
@@ -92,9 +96,7 @@ struct Geom {
     enum GeomType type;
     int materialid;
     int meshid;
-    glm::vec3 translation;
-    glm::vec3 rotation;
-    glm::vec3 scale;
+    int padding;
     glm::mat4 transform;
     glm::mat4 inverseTransform;
     glm::mat4 invTranspose;

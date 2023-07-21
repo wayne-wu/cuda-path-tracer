@@ -208,7 +208,7 @@ __host__ __device__ bool intersectFace(const PrimData& md, const Primitive& m, c
 /**
  * Test intersection between a ray and a mesh
  */
-__host__ __device__ bool meshIntersectionTest(Geom& geom, Mesh& mesh, PrimData& md, Ray& r, ShadeableIntersection& intersection){
+__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, const PrimData& md, Ray& r, ShadeableIntersection& intersection){
 
     Vec3 rayOrigin = r.origin;
 
@@ -221,16 +221,13 @@ __host__ __device__ bool meshIntersectionTest(Geom& geom, Mesh& mesh, PrimData& 
     glm::vec3 hitBary, bary;
     hitBary.z = intersection.t;  // FLT_MAX
 
-    for (int primId = 0; primId < mesh.prim_count; primId++) {
+    for (int primId = 0; primId < mesh.prim_count; ++primId) {
 
       const Primitive m = md.primitives[mesh.prim_offset + primId];
 
-      // Try intersecting with the bbox first
-      if (!intersectBox(r, m.bbox_min, m.bbox_max))
-        continue;
-
       if (m.bin_offset >= 0) {
-
+        
+        Bin binInfo;
         const Offset& bo = m.bin_offset;
 
         // Use octree for intersection testing
@@ -241,18 +238,15 @@ __host__ __device__ bool meshIntersectionTest(Geom& geom, Mesh& mesh, PrimData& 
         int bin = 0;
 
         do {
+          binInfo = md.bins[bo + bin];
 
-          glm::vec3 minCorner = md.binCorners[bo + 2 * bin];
-          glm::vec3 maxCorner = md.binCorners[bo + 2 * bin + 1];
-          if (intersectBox(r, minCorner, maxCorner)) {
+          // TODO: DRAW THE THREAD DIAGRAM FOR THE LOGIC HERE
+          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max)) {
             // Check if the current bin is leaf
-            if (md.binChildIndices[bo + bin] == -1) {
-              int startIdx = md.binStartIndices[bo + bin];
-              int endIdx = md.binEndIndices[bo + bin];
-
-              if (startIdx >= 0) {
-                for (int b = startIdx; b < endIdx; ++b) {
-                  int faceIdx = md.faceBins[m.bf_offset + b];
+            if (binInfo.childIndex == -1) {
+              if (binInfo.startIndex >= 0) {
+                for (int b = binInfo.startIndex; b < binInfo.endIndex; ++b) {
+                  int faceIdx = md.binFaces[m.bf_offset + b];
                   if (intersectFace(md, m, r, faceIdx, bary) && bary.z < hitBary.z) {
                     hitPrim = primId;
                     hitFace = faceIdx;
@@ -262,8 +256,7 @@ __host__ __device__ bool meshIntersectionTest(Geom& geom, Mesh& mesh, PrimData& 
               }
             }
             else {
-              int childBin = md.binChildIndices[bo + bin];
-              for (int i = childBin; i < childBin + 8; ++i) {
+              for (int i = binInfo.childIndex; i < binInfo.childIndex + 8; ++i) {
                 *stackPtr++ = i;  // push children bins to stack
               }
             }
@@ -275,6 +268,10 @@ __host__ __device__ bool meshIntersectionTest(Geom& geom, Mesh& mesh, PrimData& 
       }
       else
       {
+        // Try intersecting with the bbox first
+        if (!intersectBox(r, m.bbox_min, m.bbox_max))
+          continue;
+
         // Test intersection on all triangles in the mesh
         int numFaces = m.count / 3;
         for (int i = 0; i < numFaces; ++i) {

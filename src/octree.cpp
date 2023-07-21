@@ -11,12 +11,13 @@
 Octree::Octree(const Primitive& prim, const Vertices& vertices, const Indices& indices) : 
   _prim(prim), _vertices(vertices), _indices(indices) {
   
-  binDepths.push_back(0);
+  Bin root;
+  root.depth = 0;
+  root.bbox_max = _prim.bbox_max;
+  root.bbox_min = _prim.bbox_min;
+  root.childIndex = -1;
 
-  binCorners.push_back(_prim.bbox_min);
-  binCorners.push_back(_prim.bbox_max);
-
-  binChildIndices.push_back(-1);
+  bins.push_back(root);
 
   divide();
 }
@@ -40,29 +41,25 @@ void Octree::divide() {
 
     int b = divideQueue.front(); divideQueue.pop();
 
-    binMin = binCorners[2 * b];
-    binMax = binCorners[2 * b + 1];
+    Bin bin = bins[b];
 
-    cellSize = (binMax - binMin) / 2.0f;
+    cellSize = (bin.bbox_max - bin.bbox_min) / 2.0f;
 
     for (int i = 0; i < 2; ++i) {
       for (int j = 0; j < 2; ++j) {
         for (int k = 0; k < 2; ++k) {
 
-          int newBin = binDepths.size();
+          int newBinIdx = bins.size();
 
           if (i == 0 && j == 0 && k == 0)
-            binChildIndices[b] = newBin;
+            bins[b].childIndex = newBinIdx;
 
-          int depth = binDepths[b] + 1;
-
-          binDepths.push_back(depth);
-          binChildIndices.push_back(-1);
-
-          const glm::vec3 minCorner = binMin + glm::vec3(i, j, k) * cellSize;
-          binCorners.push_back(minCorner);
-          const glm::vec3 maxCorner = minCorner + cellSize;
-          binCorners.push_back(maxCorner);
+          Bin newBin;
+          newBin.depth = bin.depth + 1;
+          newBin.childIndex = -1;
+          newBin.bbox_min = bin.bbox_min + Vec3(i, j, k) * cellSize;
+          newBin.bbox_max = newBin.bbox_min + cellSize;
+          bins.push_back(newBin);
 
           vector<int> facesInBin;
 
@@ -73,9 +70,9 @@ void Octree::divide() {
             for (int idx = n; idx < n+3; ++idx)
             {
               const glm::vec3& pos = _vertices[_prim.v_offset + _indices[idx]];
-              if (pos.x >= minCorner.x && pos.x <= maxCorner.x &&
-                pos.y >= minCorner.y && pos.y <= maxCorner.y &&
-                pos.z >= minCorner.z && pos.z <= maxCorner.z) {
+              if (pos.x >= newBin.bbox_min.x && pos.x <= newBin.bbox_max.x &&
+                pos.y >= newBin.bbox_min.y && pos.y <= newBin.bbox_max.y &&
+                pos.z >= newBin.bbox_min.z && pos.z <= newBin.bbox_max.z) {
                 // Add face to bin container
                 facesInBin.push_back(faceIdx);
                 break;
@@ -86,8 +83,11 @@ void Octree::divide() {
           binFaces.push_back(facesInBin);
 
           // Check if cell needs further division
-          if (length2(maxCorner - minCorner) > minCellsize && facesInBin.size() > minBinCount && depth < maxDepth)
-            divideQueue.push(newBin);
+          std::cout << "Length " << glm::distance(newBin.bbox_max, newBin.bbox_min) << endl;
+          if (glm::distance(newBin.bbox_max, newBin.bbox_min) > minCellsize && 
+            facesInBin.size() > minBinCount && 
+            newBin.depth < maxDepth)
+            divideQueue.push(newBinIdx);
         }
       }
     }
@@ -95,14 +95,16 @@ void Octree::divide() {
     binFaces[b].clear();  // Clear all faces within bin after dividing
   }
 
-  binStartIndices = vector<int>(binChildIndices.size(), -1);
-  binEndIndices = vector<int>(binChildIndices.size(), -1);
-
   for (int i = 0; i < binFaces.size(); ++i) {
     if (!binFaces[i].empty()) {
-      binStartIndices[i] = faceBins.size();
+      std::cout << i << " size " << binFaces[i].size() << endl;
+      bins[i].startIndex = faceBins.size();
       faceBins.insert(faceBins.end(), binFaces[i].begin(), binFaces[i].end());
-      binEndIndices[i] = faceBins.size();
+      bins[i].endIndex = faceBins.size();
+    }
+    else {
+      bins[i].startIndex = -1;
+      bins[i].endIndex = -1;
     }
   }
 

@@ -57,11 +57,8 @@ Scene::Scene(string filename) {
     // TODO: Maybe find a better way to insert these elements
     for (auto& prim : primitives) {
       Octree oct(prim, mesh_vertices, mesh_indices);
-      prim.bin_offset = binChildIndices.size();
-      binChildIndices.insert(binChildIndices.end(), oct.binChildIndices.begin(), oct.binChildIndices.end());
-      binStartIndices.insert(binStartIndices.end(), oct.binStartIndices.begin(), oct.binStartIndices.end());
-      binEndIndices.insert(binEndIndices.end(), oct.binEndIndices.begin(), oct.binEndIndices.end());
-      binCorners.insert(binCorners.end(), oct.binCorners.begin(), oct.binCorners.end());
+      prim.bin_offset = bins.size();
+      bins.insert(bins.end(), oct.bins.begin(), oct.bins.end());
       prim.bf_offset = faceBins.size();
       faceBins.insert(faceBins.end(), oct.faceBins.begin(), oct.faceBins.end());
     }
@@ -105,24 +102,23 @@ int Scene::loadGeom(string objectid) {
         }
 
         //load transformations
+        glm::vec3 t, r, s;
         utilityCore::safeGetline(fp_in, line);
         while (!line.empty() && fp_in.good()) {
             vector<string> tokens = utilityCore::tokenizeString(line);
 
             //load tranformations
             if (strcmp(tokens[0].c_str(), "TRANS") == 0) {
-                newGeom.translation = glm::vec3(atof(tokens[1].c_str()), atof(tokens[2].c_str()), atof(tokens[3].c_str()));
+                t = glm::vec3(atof(tokens[1].c_str()), atof(tokens[2].c_str()), atof(tokens[3].c_str()));
             } else if (strcmp(tokens[0].c_str(), "ROTAT") == 0) {
-                newGeom.rotation = glm::vec3(atof(tokens[1].c_str()), atof(tokens[2].c_str()), atof(tokens[3].c_str()));
+                r = glm::vec3(atof(tokens[1].c_str()), atof(tokens[2].c_str()), atof(tokens[3].c_str()));
             } else if (strcmp(tokens[0].c_str(), "SCALE") == 0) {
-                newGeom.scale = glm::vec3(atof(tokens[1].c_str()), atof(tokens[2].c_str()), atof(tokens[3].c_str()));
+                s = glm::vec3(atof(tokens[1].c_str()), atof(tokens[2].c_str()), atof(tokens[3].c_str()));
             }
-
             utilityCore::safeGetline(fp_in, line);
         }
 
-        newGeom.transform = utilityCore::buildTransformationMatrix(
-                newGeom.translation, newGeom.rotation, newGeom.scale);
+        newGeom.transform = utilityCore::buildTransformationMatrix(t, r, s);
         newGeom.inverseTransform = glm::inverse(newGeom.transform);
         newGeom.invTranspose = glm::inverseTranspose(newGeom.transform);
 
