@@ -218,6 +218,8 @@ void drawGui(int windowWidth, int windowHeight) {
     cudaMemGetInfo(&free, &total);
     ImGui::Text("Free Mem: %.1f/%.1f GB", free/1000000000.0f, total/1000000000.0f);
 
+    ImGui::Text("Triangles: %d", scene->numTriangles);
+
     if (ImGui::CollapsingHeader("Render Settings")) {
       // open Dialog Simple
       if (ImGui::Button("Change Scene"))

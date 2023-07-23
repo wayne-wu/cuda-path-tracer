@@ -32,6 +32,8 @@ Scene::Scene(string filename) {
         throw;
     }
 
+    numTriangles = 0;
+
     while (fp_in.good()) {
         string line;
         utilityCore::safeGetline(fp_in, line);
@@ -390,6 +392,9 @@ int Scene::loadGLTF(const std::string& filename, float scale) {
       for (int i = 0; i < indicesAccessor.count; ++i) {
         mesh_indices.push_back(indices[i]);
       }
+
+      numTriangles += indicesAccessor.count / 3;
+
       std::cout << '\n';
 
       switch (meshPrimitive.mode) {

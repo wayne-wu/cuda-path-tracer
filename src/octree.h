@@ -13,6 +13,8 @@ class Octree {
   
 private:
   void divide();
+  void project(vector<Vec3> points, Vec3 axis, float& min, float& max);
+  bool intersectAABBTriangle(Vec3& center, Vec3& extents, vector<Vec3>& v);
 
   // TODO: Figure out the best way to pass in scene data
   const Primitive& _prim;
@@ -21,7 +23,7 @@ private:
   const Indices& _indices;
 
   int minBinCount = 100;
-  int maxDepth = 10;
+  int maxDepth = 6;
   float minCellsize = 0.01f;
 
 public:

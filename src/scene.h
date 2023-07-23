@@ -44,4 +44,6 @@ public:
     std::vector<int> faceBins;
 
     RenderState state;
+
+    int numTriangles;
 };

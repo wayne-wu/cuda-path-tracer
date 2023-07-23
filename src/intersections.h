@@ -166,33 +166,20 @@ __host__ __device__ float sphereIntersectionTest(Geom& sphere, Ray& r,
  * Test intersection between a ray and a box given the min and max points (bbox)
  * TODO: https://tavianator.com/2022/ray_box_boundary.html 
  */
-__host__ __device__ bool intersectBox(const Ray& r, const glm::vec3& v_min, const glm::vec3& v_max) {
+__host__ __device__ bool intersectBox(const Ray& r, const glm::vec3& v_min, const glm::vec3& v_max, float& t) {
 
     const glm::vec3& ro = r.origin;
-    const glm::vec3& rd = r.direction;
     const glm::vec3& n = r.inv_dir;
 
-    float tmin, tmax;
+    Vec3 tmin = (v_min - ro) * n;
+    Vec3 tmax = (v_max - ro) * n;
+    Vec3 t1 = min(tmin, tmax);
+    Vec3 t2 = max(tmin, tmax);
 
-    float tx1 = (v_min.x - ro.x) * n.x;
-    float tx2 = (v_max.x - ro.x) * n.x;
-
-    tmin = min(tx1, tx2);
-    tmax = max(tx1, tx2);
-
-    float ty1 = (v_min.y - ro.y) * n.y;
-    float ty2 = (v_max.y - ro.y) * n.y;
-
-    tmin = min(tmin, min(ty1, ty2));
-    tmax = max(tmax, max(ty1, ty2));
-
-    float tz1 = (v_min.z - ro.z) * n.z;
-    float tz2 = (v_max.z - ro.z) * n.z;
-
-    tmin = min(tmin, min(tz1, tz2));
-    tmax = max(tmax, max(tz1, tz2));
-
-    return tmax >= tmin;
+    // tNear;
+    t = max(max(t1.x, t1.y), t1.z);
+    
+    return t <= min(min(t2.x, t2.y), t2.z);
 }
 
 __host__ __device__ bool intersectFace(const PrimData& md, const Primitive& m, const Ray& r,
@@ -241,7 +228,7 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
           binInfo = md.bins[bo + bin];
 
           // TODO: DRAW THE THREAD DIAGRAM FOR THE LOGIC HERE
-          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max)) {
+          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z) && bary.z < hitBary.z) {
             // Check if the current bin is leaf
             if (binInfo.childIndex == -1) {
               if (binInfo.startIndex >= 0) {
@@ -269,7 +256,7 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
       else
       {
         // Try intersecting with the bbox first
-        if (!intersectBox(r, m.bbox_min, m.bbox_max))
+        if (!intersectBox(r, m.bbox_min, m.bbox_max, bary.z))
           continue;
 
         // Test intersection on all triangles in the mesh
