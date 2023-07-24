@@ -227,24 +227,19 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
         do {
           binInfo = md.bins[bo + bin];
 
-          // TODO: DRAW THE THREAD DIAGRAM FOR THE LOGIC HERE
-          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z) && bary.z < hitBary.z) {
-            // Check if the current bin is leaf
-            if (binInfo.childIndex == -1) {
-              if (binInfo.startIndex >= 0) {
-                for (int b = binInfo.startIndex; b < binInfo.endIndex; ++b) {
-                  int faceIdx = md.binFaces[m.bf_offset + b];
-                  if (intersectFace(md, m, r, faceIdx, bary) && bary.z < hitBary.z) {
-                    hitPrim = primId;
-                    hitFace = faceIdx;
-                    hitBary = bary;
-                  }
-                }
-              }
-            }
-            else {
+          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z)) {
+            if (binInfo.childIndex != -1)  // check if has more children
               for (int i = binInfo.childIndex; i < binInfo.childIndex + 8; ++i) {
                 *stackPtr++ = i;  // push children bins to stack
+              }
+            else if (binInfo.startIndex >= 0) { 
+              for (int b = binInfo.startIndex; b < binInfo.endIndex; ++b) {
+                int faceIdx = md.binFaces[m.bf_offset + b];
+                if (intersectFace(md, m, r, faceIdx, bary) && bary.z < hitBary.z) {
+                  hitPrim = primId;
+                  hitFace = faceIdx;
+                  hitBary = bary;
+                }
               }
             }
           }

@@ -144,7 +144,7 @@ void Octree::divide() {
           binFaces.push_back(facesInBin);
 
           // Check if cell needs further division
-          std::cout << "Length " << glm::distance(newBin.bbox_max, newBin.bbox_min) << endl;
+          // std::cout << "Length " << glm::distance(newBin.bbox_max, newBin.bbox_min) << endl;
           if (glm::distance(newBin.bbox_max, newBin.bbox_min) > minCellsize && 
             facesInBin.size() > minBinCount && 
             newBin.depth < maxDepth)
@@ -158,7 +158,7 @@ void Octree::divide() {
 
   for (int i = 0; i < binFaces.size(); ++i) {
     if (!binFaces[i].empty()) {
-      std::cout << i << " size " << binFaces[i].size() << endl;
+      // std::cout << i << " size " << binFaces[i].size() << endl;
       bins[i].startIndex = faceBins.size();
       faceBins.insert(faceBins.end(), binFaces[i].begin(), binFaces[i].end());
       bins[i].endIndex = faceBins.size();
