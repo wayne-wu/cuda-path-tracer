@@ -129,7 +129,7 @@ static Geom * dev_geoms = NULL;
 static Mesh * dev_meshes = NULL;
 static Material * dev_materials = NULL;
 static PathSegment * dev_paths = NULL;  
-static PathSegment * dev_final_paths = NULL;
+static PathSegment * dev_paths_start = NULL;
 static ShadeableIntersection * dev_intersections = NULL;
 static ShadeableIntersection * dev_first_intersections = NULL;
 
@@ -149,6 +149,10 @@ static GBufferPixel* dev_gBuffer = NULL;
 static cudaEvent_t startEvent = NULL;
 static cudaEvent_t endEvent = NULL;
 #endif
+
+// Streams
+static cudaStream_t stream1 = NULL;
+static cudaStream_t stream2 = NULL;
 
 
 template <class T>
@@ -205,7 +209,7 @@ void pathtraceInit(Scene *scene) {
     cudaMemset(dev_image, 0, pixelcount * sizeof(glm::vec3));
 
     cudaMalloc(&dev_paths, pixelcount * sizeof(PathSegment));
-    dev_final_paths = dev_paths;
+    dev_paths_start = dev_paths;
 
     cudaMalloc(&dev_intersections, pixelcount * sizeof(ShadeableIntersection));
     cudaMemset(dev_intersections, 0, pixelcount * sizeof(ShadeableIntersection));
@@ -242,6 +246,9 @@ void pathtraceInit(Scene *scene) {
     cudaEventCreate(&startEvent);
     cudaEventCreate(&endEvent);
 #endif
+
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
 
     // Denoising
     cudaMalloc(&dev_gBuffer, pixelcount * sizeof(GBufferPixel));
@@ -280,6 +287,9 @@ void pathtraceFree() {
       cudaEventDestroy(endEvent);
 #endif
 
+    if(stream1) cudaStreamDestroy(stream1);
+    if(stream2) cudaStreamDestroy(stream2);
+
     checkCUDAError("pathtraceFree");
 }
 
@@ -298,7 +308,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 
     if (x < cam.resolution.x && y < cam.resolution.y) {
         int index = x + (y * cam.resolution.x);
-        PathSegment & segment = pathSegments[index];
+        PathSegment& segment = pathSegments[index];
 
         segment.ray.origin = cam.position;
         segment.color = Color(1.0);
@@ -319,17 +329,23 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 // Generating new rays is handled in your shader(s).
 // Feel free to modify the code below.
 __global__ void computeIntersections(
-    int depth
-    , int num_paths
+      int num_paths
+    , int num_prims
+    , int num_geoms
     , PathSegment * pathSegments
     , Geom * geoms
     , Mesh * meshes
-    , int geoms_size
     , PrimData mesh_data
     , ShadeableIntersection * intersections
     )
 {
+    extern __shared__ Primitive prims[];
     int path_index = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (threadIdx.x < num_prims)
+      prims[threadIdx.x] = mesh_data.primitives[threadIdx.x];
+
+    __syncthreads();
 
     if (path_index < num_paths)
     {
@@ -339,14 +355,13 @@ __global__ void computeIntersections(
         ShadeableIntersection intersection;
         intersection.t = FLT_MAX;
         bool hit = false;
-        int hit_geom_index = -1;
         bool outside = true;
 
         // TODO: Maybe just create a temp ShadeableIntersection object
         glm::vec3 tmp_intersect;
 
         // naive parse through global geoms
-        for (int i = 0; i < geoms_size; i++)
+        for (int i = 0; i < num_geoms; i++)
         {
             Geom & geom = geoms[i];
 
@@ -354,6 +369,7 @@ __global__ void computeIntersections(
             {
                 t = boxIntersectionTest(geom, pathSegment.ray, tmp_intersect, intersection.surfaceNormal, outside);
                 if (t > 0.f && t < intersection.t) {
+                  intersection.hit.geomId = i;
                   intersection.t = t;
                   intersection.materialId = geom.materialid;
                   hit = true;
@@ -363,6 +379,7 @@ __global__ void computeIntersections(
             {
                 t = sphereIntersectionTest(geom, pathSegment.ray, tmp_intersect, intersection.surfaceNormal, outside);
                 if (t > 0.f && t < intersection.t) {
+                  intersection.hit.geomId = i;
                   intersection.t = t;
                   intersection.materialId = geom.materialid;
                   hit = true;
@@ -370,7 +387,11 @@ __global__ void computeIntersections(
             }
             else if (geom.type == MESH)
             {
-                hit |= meshIntersectionTest(geom, meshes[geom.meshid], mesh_data, pathSegment.ray, intersection);
+              if (meshIntersectionTest(geom, meshes[geom.meshid], prims, mesh_data, pathSegment.ray, intersection))
+              {
+                  intersection.hit.geomId = i;
+                  hit = true;
+              }
             }
             // TODO: add more intersection tests here... triangle? metaball? CSG?
 
@@ -385,23 +406,32 @@ __global__ void computeIntersections(
 __global__ void shadeBSDF(
   int iter
   , int num_paths
+  , int mat_size
   , ShadeableIntersection* shadeableIntersections
   , PathSegment* pathSegments
   , Material* materials
   , cudaTextureObject_t* textures) {
 
+  extern __shared__ Material mats[];
+
+  int tx = threadIdx.x;
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tx < mat_size)
+    mats[tx] = materials[tx];
+
+  __syncthreads();
+
   if (idx < num_paths) {
+
     ShadeableIntersection intersection = shadeableIntersections[idx];
     PathSegment pathSegment = pathSegments[idx];
-    
-    if (intersection.t > 0.0f) {
 
+    if (intersection.t > 0.f) {
       thrust::default_random_engine rng = makeSeededRandomEngine(iter, idx, 0);
       thrust::uniform_real_distribution<float> u01(0, 1);
 
-      Material material = materials[intersection.materialId];
-      Color materialColor = material.pbrMetallicRoughness.baseColorFactor;
+      const Material& material = mats[intersection.materialId];
 
       Color emissiveColor = material.emissiveFactor;
       if (material.emissiveTexture.index >= 0) {
@@ -419,7 +449,7 @@ __global__ void shadeBSDF(
       }
     }
     else {
-      pathSegment.color = Color(0.0f);
+      pathSegment.color = Color(0.f);
       pathSegment.remainingBounces = 0;
     }
 
@@ -608,7 +638,7 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
     // 1D block for path tracing
     const size_t blockSize1d = 128;
 
-    generateRayFromCamera <<<blocksPerGrid2d, blockSize2d >>>(cam, iter, traceDepth, dev_paths);
+    generateRayFromCamera <<<blocksPerGrid2d, blockSize2d, 0, stream1 >>>(cam, iter, traceDepth, dev_paths);
     checkCUDAError("generate camera ray");
 
     int depth = 0;
@@ -632,22 +662,23 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
 #endif
 
       if (intersections == NULL) {
-        computeIntersections << <numblocksPathSegmentTracing, blockSize1d >> > (
-          depth
-          , num_paths
+        int num_prims = hst_scene->primitives.size();
+        computeIntersections << <numblocksPathSegmentTracing, blockSize1d, num_prims*sizeof(Primitive), stream1 >> > (
+          num_paths
+          , num_prims
+          , hst_scene->geoms.size()
           , dev_paths
           , dev_geoms
           , dev_meshes
-          , hst_scene->geoms.size()
           , dev_prim_data
-          , dev_intersections
-          );
-        checkCUDAError("trace one bounce");
-
+          , dev_intersections);
+        checkCUDAError("Compute Intersections");
+        
 #if CACHE_FIRST_BOUNCE
         // NOTE: Copy before sorting since dev_first_intersections should map to unsorted dev_paths
         if(depth == 0 && iter == 1)
-          cudaMemcpy(dev_first_intersections, dev_intersections, pixelcount * sizeof(ShadeableIntersection), cudaMemcpyDeviceToDevice);
+          cudaMemcpyAsync(dev_first_intersections, dev_intersections, 
+            pixelcount * sizeof(ShadeableIntersection), cudaMemcpyDeviceToDevice, stream2);
 #endif
 
 #if RAY_SORTING
@@ -658,11 +689,9 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
         intersections = dev_intersections;
       }
 
-      if (denoise && depth == 0) {
-        generateGBuffer<<<numblocksPathSegmentTracing, blockSize1d>>> (num_paths, intersections, dev_paths, dev_gBuffer, cam.viewMat);
-      }
-
-      depth++;
+      //if (denoise && depth == 0) {
+      //  generateGBuffer<<<numblocksPathSegmentTracing, blockSize1d>>> (num_paths, intersections, dev_paths, dev_gBuffer, cam.viewMat);
+      //}
 
 #if TIMING
       cudaEventRecord(startEvent);
@@ -676,9 +705,11 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
       // materials you have in the scenefile.
       // TODO: compare between directly shading the path segments and shading
       // path segments that have been reshuffled to be contiguous in memory.
-      shadeBSDF <<<numblocksPathSegmentTracing, blockSize1d>>> (
+      int matSize = hst_scene->materials.size();
+      shadeBSDF <<<numblocksPathSegmentTracing, blockSize1d, matSize*sizeof(Material), stream1>>> (
         iter,
         num_paths,
+        matSize,
         intersections,
         dev_paths,
         dev_materials,
@@ -687,7 +718,7 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
       checkCUDAError("shadeBSDF failed");
 
       // partition (stream compaction) the buffer based on whether the ray path is completed
-      dev_paths = thrust::stable_partition(thrust::device, dev_paths, dev_paths + num_paths, isPathCompleted());
+      dev_paths = thrust::partition(thrust::device, dev_paths, dev_paths + num_paths, isPathCompleted());
 
       num_paths = dev_path_end - dev_paths;
 
@@ -700,44 +731,38 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
       cudaEventSynchronize(endEvent);
       float ms;
       cudaEventElapsedTime(&ms, startEvent, endEvent);
-      if (depth == 2 && iter % 10 == 0) {
-        std::cout << iter;
-        std::cout << " " << depth;
-        std::cout << " " << ms;
-        std::cout << " " << num_paths << endl;
-      }
 #endif
+    
+      ++depth;
     }
 
     // Assemble this iteration and apply it to the image
     dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
-    finalGather<<<numBlocksPixels, blockSize1d>>>(N, dev_image, dev_final_paths);
-    checkCUDAError("pathtrace");
+    finalGather<<<numBlocksPixels, blockSize1d, 0, stream1>>>(N, dev_image, dev_paths_start);
+    checkCUDAError("Final Gather");
     
-    // Reset dev_paths to point to first element
-    dev_paths = dev_final_paths;  
+    // Reset pointers to the start
+    dev_paths = dev_paths_start;
 
-    if (denoise) {
-      cudaMemcpy(dev_denoised_image, dev_image, pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
-      normalizeImage << <blocksPerGrid2d, blockSize2d >> > (cam.resolution.x, cam.resolution.y, dev_denoised_image, iter);
-      
-      for (int i = 0; i < filterPasses; i++) {
-        int stepWidth = 1;
-        while (4 * stepWidth <= filterSize) {
-          kernDenoise<<<blocksPerGrid2d, blockSize2d>>>(
-            cam.resolution.x,
-            cam.resolution.y,
-            dev_denoised_image, filterSize,
-            dev_gBuffer, stepWidth, cam.viewMat, cam.projMat,
-            colorWeight, normalWeight, positionWeight);
-          stepWidth <<= 1;
-        }
-      }
+    //if (denoise) {
+    //  cudaMemcpy(dev_denoised_image, dev_image, pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
+    //  normalizeImage << <blocksPerGrid2d, blockSize2d >> > (cam.resolution.x, cam.resolution.y, dev_denoised_image, iter);
+    //  
+    //  for (int i = 0; i < filterPasses; i++) {
+    //    int stepWidth = 1;
+    //    while (4 * stepWidth <= filterSize) {
+    //      kernDenoise<<<blocksPerGrid2d, blockSize2d>>>(
+    //        cam.resolution.x,
+    //        cam.resolution.y,
+    //        dev_denoised_image, filterSize,
+    //        dev_gBuffer, stepWidth, cam.viewMat, cam.projMat,
+    //        colorWeight, normalWeight, positionWeight);
+    //      stepWidth <<= 1;
+    //    }
+    //  }
 
-      cudaMemcpy(dev_image, dev_denoised_image, pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
-    }
-
-
+    //  cudaMemcpy(dev_image, dev_denoised_image, pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
+    //}
 }
 
 

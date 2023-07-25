@@ -203,15 +203,26 @@ struct PathSegment {
     int remainingBounces;
 };
 
+struct Hit {
+  int geomId = -1;
+  int meshId = -1;
+  int primId = -1;
+  int binId = -1;
+  int faceId = -1;
+  Vec3 bary;
+};
+
 // Use with a corresponding PathSegment to do:
 // 1) color contribution computation
 // 2) BSDF evaluation: generate a new ray
 struct ShadeableIntersection {
   float t;
-  glm::vec3 surfaceNormal;
   int materialId;
+  glm::vec3 surfaceNormal;
   glm::vec2 uv;
   glm::vec4 tangent;
+  Hit hit;
+  int padding;
 };
 
 struct GBufferPixel {

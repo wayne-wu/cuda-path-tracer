@@ -191,11 +191,73 @@ __host__ __device__ bool intersectFace(const PrimData& md, const Primitive& m, c
     md.vertices[m.v_offset + md.indices[m.i_offset + i]], bary);
 }
 
+/*
+Compute the info needed for shading for a face/triangle.
+*/
+__host__ __device__ void computeFaceInfo(const PrimData& md, const Primitive& m, const int faceId, const Vec3& bary, 
+                                         Vec3& normal, Vec2& uv, Vec4& tangent) {
+  
+  const int& hitFace = faceId;
+  int f0 = md.indices[m.i_offset + 3 * hitFace];
+  int f1 = md.indices[m.i_offset + 3 * hitFace + 1];
+  int f2 = md.indices[m.i_offset + 3 * hitFace + 2];
+
+  glm::vec3 v0, v1, v2;
+  v0 = md.vertices[m.v_offset + f0];
+  v1 = md.vertices[m.v_offset + f1];
+  v2 = md.vertices[m.v_offset + f2];
+
+  // Interpolate Normal
+  if (m.n_offset >= 0) {
+    lerp<glm::vec3>(normal,
+      md.normals[m.n_offset + f0],
+      md.normals[m.n_offset + f1],
+      md.normals[m.n_offset + f2], bary.x, bary.y);
+  }
+
+  // Interpolate UV
+  glm::vec2 uv0, uv1, uv2;
+  if (m.uv_offset >= 0) {
+    uv0 = md.uvs[m.uv_offset + f0];
+    uv1 = md.uvs[m.uv_offset + f1];
+    uv2 = md.uvs[m.uv_offset + f2];
+    lerp<glm::vec2>(uv, uv0, uv1, uv2, bary.x, bary.y);
+  }
+
+  // Interpolate Tangent
+  if (m.t_offset >= 0) {
+    lerp<glm::vec4>(tangent,
+      md.tangents[m.t_offset + f0],
+      md.tangents[m.t_offset + f1],
+      md.tangents[m.t_offset + f2],
+      bary.x, bary.y);
+  }
+  else {
+    // Calculate tangent vector: 
+    // https://www.cs.upc.edu/~virtual/G/1.%20Teoria/06.%20Textures/Tangent%20Space%20Calculation.pdf
+
+    glm::vec3 dp1 = v1 - v0;
+    glm::vec3 dp2 = v2 - v0;
+    glm::vec2 du1 = uv1 - uv0;
+    glm::vec2 du2 = uv2 - uv0;
+
+    float r = 1.0F / (du1.x * du2.y - du2.x * du1.y);
+    glm::vec3 sdir((du2.y * dp1.x - du1.y * dp2.x) * r, (du2.y * dp1.y - du1.y * dp2.y) * r,
+      (du2.y * dp1.z - du1.y * dp2.z) * r);
+    glm::vec3 tdir((du1.x * dp2.x - du2.x * dp1.x) * r, (du1.x * dp2.y - du2.x * dp1.y) * r,
+      (du1.x * dp2.z - du2.x * dp1.z) * r);
+
+    tangent = glm::vec4(
+      glm::normalize(sdir - normal * glm::dot(normal, sdir)),
+      glm::dot(glm::cross(normal, sdir), tdir) < 0.f ? -1.f : 1.f);
+  }
+}
+
 
 /**
  * Test intersection between a ray and a mesh
  */
-__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, const PrimData& md, Ray& r, ShadeableIntersection& intersection){
+__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, Primitive* prims, const PrimData& md, Ray& r, ShadeableIntersection& intersection){
 
     Vec3 rayOrigin = r.origin;
 
@@ -203,14 +265,13 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
     r.direction = glm::normalize(multiplyMV(geom.inverseTransform, glm::vec4(r.direction, 0.0f)));
     r.inv_dir = 1.0f / r.direction;
 
-    int hitPrim = -1;
-    int hitFace = -1;
-    glm::vec3 hitBary, bary;
+    glm::vec3 bary;
+    glm::vec3& hitBary = intersection.hit.bary;
     hitBary.z = intersection.t;  // FLT_MAX
 
-    for (int primId = 0; primId < mesh.prim_count; ++primId) {
+    for (int primId = mesh.prim_offset; primId < mesh.prim_offset + mesh.prim_count; ++primId) {
 
-      const Primitive m = md.primitives[mesh.prim_offset + primId];
+      const Primitive& m = prims[primId];
 
       if (m.bin_offset >= 0) {
         
@@ -236,9 +297,9 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
               for (int b = binInfo.startIndex; b < binInfo.endIndex; ++b) {
                 int faceIdx = md.binFaces[m.bf_offset + b];
                 if (intersectFace(md, m, r, faceIdx, bary) && bary.z < hitBary.z) {
-                  hitPrim = primId;
-                  hitFace = faceIdx;
-                  hitBary = bary;
+                  intersection.hit.primId = primId;
+                  intersection.hit.faceId = faceIdx;
+                  intersection.hit.bary = bary;
                 }
               }
             }
@@ -258,72 +319,21 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
         int numFaces = m.count / 3;
         for (int i = 0; i < numFaces; ++i) {
           if (intersectFace(md, m, r, i, bary) && bary.z < hitBary.z) {
-            hitPrim = primId;
-            hitFace = i;
-            hitBary = bary;
+            intersection.hit.primId = primId;
+            intersection.hit.faceId = i;
+            intersection.hit.bary = bary;
           }
         }
       }
     }
 
     // TODO: Reduce divergence. Maybe move everything below to a new kernel after compaction?
-    if (hitPrim >= 0) {
+    if (intersection.hit.primId >= 0) {
 
-      const Primitive m = md.primitives[mesh.prim_offset + hitPrim];
+      const Primitive& m = prims[intersection.hit.primId];
 
-      int f0 = md.indices[m.i_offset + 3 * hitFace];
-      int f1 = md.indices[m.i_offset + 3 * hitFace + 1];
-      int f2 = md.indices[m.i_offset + 3 * hitFace + 2];
-
-      glm::vec3 v0, v1, v2;
-      v0 = md.vertices[m.v_offset + f0];
-      v1 = md.vertices[m.v_offset + f1];
-      v2 = md.vertices[m.v_offset + f2];
-
-      // Interpolate Normal
-      if (m.n_offset >= 0) {
-        lerp<glm::vec3>(intersection.surfaceNormal, 
-          md.normals[m.n_offset + f0], 
-          md.normals[m.n_offset + f1], 
-          md.normals[m.n_offset + f2], hitBary.x, hitBary.y);
-      }
-
-      // Interpolate UV
-      glm::vec2 uv0, uv1, uv2;
-      if (m.uv_offset >= 0) {
-        uv0 = md.uvs[m.uv_offset + f0];
-        uv1 = md.uvs[m.uv_offset + f1];
-        uv2 = md.uvs[m.uv_offset + f2];
-        lerp<glm::vec2>(intersection.uv, uv0, uv1, uv2, hitBary.x, hitBary.y);
-      }
-
-      // Interpolate Tangent
-      if (m.t_offset >= 0) {
-        lerp<glm::vec4>(intersection.tangent, 
-          md.tangents[m.t_offset + f0], 
-          md.tangents[m.t_offset + f1], 
-          md.tangents[m.t_offset + f2], 
-          hitBary.x, hitBary.y);
-      }
-      else {
-        // Calculate tangent vector: 
-        // https://www.cs.upc.edu/~virtual/G/1.%20Teoria/06.%20Textures/Tangent%20Space%20Calculation.pdf
-
-        glm::vec3 dp1 = v1 - v0;
-        glm::vec3 dp2 = v2 - v0;
-        glm::vec2 du1 = uv1 - uv0;
-        glm::vec2 du2 = uv2 - uv0;
-
-        float r = 1.0F / (du1.x * du2.y - du2.x * du1.y);
-        glm::vec3 sdir((du2.y * dp1.x - du1.y * dp2.x) * r, (du2.y * dp1.y - du1.y * dp2.y) * r,
-          (du2.y * dp1.z - du1.y * dp2.z) * r);
-        glm::vec3 tdir((du1.x * dp2.x - du2.x * dp1.x) * r, (du1.x * dp2.y - du2.x * dp1.y) * r,
-          (du1.x * dp2.z - du2.x * dp1.z) * r);
-
-        intersection.tangent = glm::vec4(
-          glm::normalize(sdir - intersection.surfaceNormal * glm::dot(intersection.surfaceNormal, sdir)),
-          glm::dot(glm::cross(intersection.surfaceNormal, sdir), tdir) < 0.f ? -1.f : 1.f);
-      }
+      computeFaceInfo(md, m, intersection.hit.faceId, intersection.hit.bary,
+        intersection.surfaceNormal, intersection.uv, intersection.tangent);
 
       intersection.surfaceNormal = glm::normalize(
         multiplyMV(geom.invTranspose, glm::vec4(intersection.surfaceNormal, 1.f)));
