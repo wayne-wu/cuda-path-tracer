@@ -10,10 +10,23 @@
 #include <string>
 #include <vector>
 
+
+// Constants
 #define PI                3.1415926535897932384626422832795028841971f
 #define TWO_PI            6.2831853071795864769252867665590057683943f
 #define SQRT_OF_ONE_THIRD 0.5773502691896257645091487805019574556476f
 #define EPSILON           0.00001f
+
+// Flags
+#define TIMING 0
+#define ERRORCHECK 1
+#define CACHE_FIRST_BOUNCE 1
+#define RAY_SORTING 0
+#define USE_GBUFFER 1
+#define COMPACT_GBUFFER 0
+#define OCTREE 1
+#define CUDA_STREAM 1
+
 
 namespace utilityCore {
     extern float clamp(float f, float min, float max);

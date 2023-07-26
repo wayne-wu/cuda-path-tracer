@@ -55,6 +55,7 @@ Scene::Scene(string filename) {
         }
     }
 
+#if OCTREE
     cout << "\nConstructing Octrees ..." << endl;
     // TODO: Maybe find a better way to insert these elements
     for (auto& prim : primitives) {
@@ -65,7 +66,7 @@ Scene::Scene(string filename) {
       faceBins.insert(faceBins.end(), oct.faceBins.begin(), oct.faceBins.end());
     }
     cout << "Octrees completed." << endl << endl;
-
+#endif
 
     std::random_device rd;
     std::default_random_engine eng(rd());

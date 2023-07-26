@@ -79,7 +79,7 @@ struct PrimData {
     Bin* bins;
     int* binFaces;
 
-    void free() {
+    void free(bool octree) {
       cudaFree(primitives);
       cudaFree(vertices);
       cudaFree(normals);

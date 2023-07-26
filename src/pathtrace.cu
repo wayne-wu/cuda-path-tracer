@@ -19,12 +19,6 @@
 #include "intersections.h"
 #include "interactions.h"
 
-#define TIMING 0
-#define ERRORCHECK 1
-#define CACHE_FIRST_BOUNCE 1
-#define RAY_SORTING 0
-#define USE_GBUFFER 1
-#define COMPACT_GBUFFER 0
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
@@ -233,9 +227,10 @@ void pathtraceInit(Scene *scene) {
     for (int i = 0; i < scene->textures.size(); i++)
       textureInit(scene->textures[i], i);
 
-    // Octree
+#if OCTREE
     mallocAndCopy<Bin>(dev_prim_data.bins, scene->bins);
     mallocAndCopy<int>(dev_prim_data.binFaces, scene->faceBins);
+#endif
 
 #if CACHE_FIRST_BOUNCE
     cudaMalloc(&dev_first_intersections, pixelcount * sizeof(ShadeableIntersection));
@@ -247,8 +242,13 @@ void pathtraceInit(Scene *scene) {
     cudaEventCreate(&endEvent);
 #endif
 
+#if CUDA_STREAM
     cudaStreamCreate(&stream1);
     cudaStreamCreate(&stream2);
+#else
+    stream1 = 0;
+    stream2 = 0;
+#endif
 
     // Denoising
     cudaMalloc(&dev_gBuffer, pixelcount * sizeof(GBufferPixel));
@@ -269,7 +269,11 @@ void pathtraceFree() {
     cudaFree(dev_denoised_image);
 
     // Mesh GPU data free
-    dev_prim_data.free();
+#if OCTREE
+    dev_prim_data.free(true);
+#else
+    dev_prim_data.free(false);
+#endif
 
     for (int i = 0; i < texObjs.size(); i++) {
       cudaDestroyTextureObject(texObjs[i]);
@@ -287,8 +291,10 @@ void pathtraceFree() {
       cudaEventDestroy(endEvent);
 #endif
 
+#if CUDA_STREAM
     if(stream1) cudaStreamDestroy(stream1);
     if(stream2) cudaStreamDestroy(stream2);
+#endif
 
     checkCUDAError("pathtraceFree");
 }
