@@ -288,7 +288,7 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
         do {
           binInfo = md.bins[bo + bin];
 
-          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z)) {
+          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z) && bary.z < hitBary.z) {
             if (binInfo.childIndex != -1)  // check if has more children
               for (int i = binInfo.childIndex; i < binInfo.childIndex + 8; ++i) {
                 *stackPtr++ = i;  // push children bins to stack
