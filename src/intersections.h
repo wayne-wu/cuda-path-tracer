@@ -54,6 +54,17 @@ __host__ __device__ glm::vec3 multiplyMV(glm::mat4 m, glm::vec4 v) {
     return glm::vec3(m * v);
 }
 
+/**
+ * Multiplies a mat4 and a vec3 and returns a vec3 clipped from the vec4.
+ */
+__host__ __device__ glm::vec3 multiplyMV1(glm::mat4 m, glm::vec3 v) {
+  return glm::vec3(m * glm::vec4(v, 1.f));
+}
+
+__host__ __device__ glm::vec3 multiplyMV0(glm::mat4 m, glm::vec3 v) {
+  return glm::vec3(m * glm::vec4(v, 0.f));
+}
+
 // CHECKITOUT
 /**
  * Test intersection between a ray and a transformed cube. Untransformed,
@@ -261,13 +272,19 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
 
     Vec3 rayOrigin = r.origin;
 
+    Vec3 ptWS = getPointOnRay(r, intersection.t);
+
+    // Move ray into object space
     r.origin = multiplyMV(geom.inverseTransform, glm::vec4(r.origin, 1.0f));
     r.direction = glm::normalize(multiplyMV(geom.inverseTransform, glm::vec4(r.direction, 0.0f)));
     r.inv_dir = 1.0f / r.direction;
 
     glm::vec3 bary;
     glm::vec3& hitBary = intersection.hit.bary;
-    hitBary.z = intersection.t;  // FLT_MAX
+
+    // Get the current closest distance in object space
+    hitBary.z = intersection.hit.geomId < 0 ? FLT_MAX : 
+      glm::length(r.origin - multiplyMV1(geom.inverseTransform, ptWS));
 
     for (int primId = mesh.prim_offset; primId < mesh.prim_offset + mesh.prim_count; ++primId) {
 
@@ -336,13 +353,15 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
         intersection.surfaceNormal, intersection.uv, intersection.tangent);
 
       intersection.surfaceNormal = glm::normalize(
-        multiplyMV(geom.invTranspose, glm::vec4(intersection.surfaceNormal, 1.f)));
-      intersection.tangent = glm::vec4(glm::normalize(
-        multiplyMV(geom.invTranspose, intersection.tangent)), intersection.tangent.z);
+        multiplyMV0(geom.invTranspose, intersection.surfaceNormal));
+      intersection.tangent = glm::vec4(
+        glm::normalize(multiplyMV0(geom.invTranspose, glm::vec3(intersection.tangent))), 
+        intersection.tangent.w);
 
       intersection.materialId = m.mat_id;
 
-      intersection.t = glm::length(rayOrigin - multiplyMV(geom.transform, glm::vec4(getPointOnRay(r, hitBary.z), 1.f)));
+      // Calculate intersection distance in world space
+      intersection.t = glm::length(rayOrigin - multiplyMV1(geom.transform, getPointOnRay(r, intersection.hit.bary.z)));
 
       return true;
     }
