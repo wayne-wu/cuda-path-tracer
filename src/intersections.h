@@ -268,15 +268,14 @@ __host__ __device__ void computeFaceInfo(const PrimData& md, const Primitive& m,
 /**
  * Test intersection between a ray and a mesh
  */
-__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, Primitive* prims, const PrimData& md, Ray& r, ShadeableIntersection& intersection){
+__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, Primitive* prims, const PrimData& md, const Ray& ray, ShadeableIntersection& intersection){
 
-    Vec3 rayOrigin = r.origin;
-
-    Vec3 ptWS = getPointOnRay(r, intersection.t);
+    Vec3 ptWS = getPointOnRay(ray, intersection.t);
 
     // Move ray into object space
-    r.origin = multiplyMV(geom.inverseTransform, glm::vec4(r.origin, 1.0f));
-    r.direction = glm::normalize(multiplyMV(geom.inverseTransform, glm::vec4(r.direction, 0.0f)));
+    Ray r = ray;
+    r.origin = multiplyMV1(geom.inverseTransform, ray.origin);
+    r.direction = glm::normalize(multiplyMV0(geom.inverseTransform, ray.direction));
     r.inv_dir = 1.0f / r.direction;
 
     glm::vec3 bary;
@@ -361,7 +360,7 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
       intersection.materialId = m.mat_id;
 
       // Calculate intersection distance in world space
-      intersection.t = glm::length(rayOrigin - multiplyMV1(geom.transform, getPointOnRay(r, intersection.hit.bary.z)));
+      intersection.t = glm::length(ray.origin - multiplyMV1(geom.transform, getPointOnRay(r, intersection.hit.bary.z)));
 
       return true;
     }

@@ -36,8 +36,8 @@ struct Ray {
 };
 
 struct Mesh {
-  int prim_count;
-  int prim_offset;
+    int prim_count;
+    int prim_offset;
 };
 
 struct Primitive {
@@ -79,16 +79,16 @@ struct PrimData {
     Bin* bins;
     int* binFaces;
 
-    void free(bool octree) {
+    void free() {
       cudaFree(primitives);
       cudaFree(vertices);
       cudaFree(normals);
       cudaFree(indices);
       cudaFree(uvs);
       cudaFree(tangents);
-
-      cudaFree(bins);
-      cudaFree(binFaces);
+      
+      if (bins) cudaFree(bins);
+      if (binFaces) cudaFree(binFaces);
     }
 };
 

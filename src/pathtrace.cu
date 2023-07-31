@@ -269,11 +269,7 @@ void pathtraceFree() {
     cudaFree(dev_denoised_image);
 
     // Mesh GPU data free
-#if OCTREE
-    dev_prim_data.free(true);
-#else
-    dev_prim_data.free(false);
-#endif
+    dev_prim_data.free();
 
     for (int i = 0; i < texObjs.size(); i++) {
       cudaDestroyTextureObject(texObjs[i]);
