@@ -89,6 +89,15 @@ struct PrimData {
       
       if (bins) cudaFree(bins);
       if (binFaces) cudaFree(binFaces);
+
+      primitives = NULL;
+      vertices = NULL;
+      normals = NULL;
+      indices = NULL;
+      uvs = NULL;
+      tangents = NULL;
+      bins = NULL;
+      binFaces = NULL;
     }
 };
 

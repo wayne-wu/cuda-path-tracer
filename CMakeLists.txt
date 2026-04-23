@@ -33,6 +33,7 @@ endif()
 
 find_package(CUDA 10 REQUIRED)
 include(${CMAKE_MODULE_PATH}/CUDAComputesList.cmake)
+find_package(OptiX REQUIRED)
 
 list(APPEND CUDA_NVCC_FLAGS ${CUDA_GENERATE_CODE})
 list(APPEND CUDA_NVCC_FLAGS_DEBUG "-g -G")
@@ -72,6 +73,7 @@ endif(UNIX)
 set(GLM_ROOT_DIR "external")
 find_package(GLM REQUIRED)
 include_directories(${GLM_INCLUDE_DIRS})
+include_directories(${OptiX_INCLUDE_DIRS})
 
 set(headers
     src/main.h
@@ -80,6 +82,9 @@ set(headers
     src/intersections.h
     src/glslUtility.hpp
     src/octree.h
+    src/OptiXDenoiser.h
+    src/OptiXDenoiserUtil.h
+    src/optixCheck.h
     src/pathtrace.h
     src/scene.h
     src/sceneStructs.h
@@ -133,6 +138,7 @@ source_group(imgui FILES ${imgui})
 #add_subdirectory(stream_compaction)  # TODO: uncomment if using your stream compaction
 
 cuda_add_executable(${CMAKE_PROJECT_NAME} ${sources} ${headers} ${imgui} ${imguifile})
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${OptiX_INCLUDE_DIRS})
 target_link_libraries(${CMAKE_PROJECT_NAME}
     ${LIBRARIES}
     #stream_compaction  # TODO: uncomment if using your stream compaction

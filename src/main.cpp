@@ -11,14 +11,14 @@ static bool middleMousePressed = false;
 static double lastX;
 static double lastY;
 
-int ui_iterations = 500;
-int startupIterations = 500;
+int ui_iterations = 100;
+int startupIterations = 100;
 int lastLoopIterations = 0;
 string lastSceneFile = "";
 
 bool ui_showGbuffer = false;
 int ui_GbufferMode = GBUFFER_NORMAL;  //switch between different gbuffers
-bool ui_denoise = false;
+bool ui_denoise = true;
 int ui_filterSize = 80;
 int ui_filterPasses = 1;
 float ui_colorWeight = 0.166f;
@@ -127,10 +127,18 @@ void saveImage() {
 void runCuda() {
 
     if (lastSceneFile != ui_sceneFile) {
+      int oldWidth = width;
+      int oldHeight = height;
+
+      pathtraceFree();
+
       if (scene)
         delete scene;  // clean up CPU-side scene data
 
       loadScene(ui_sceneFile);
+      if (width != oldWidth || height != oldHeight) {
+        resizeRenderTarget();
+      }
       lastSceneFile = ui_sceneFile;
       iteration = 0;
     }
