@@ -85,11 +85,11 @@ GLuint initShader() {
 }
 
 void deletePBO(GLuint* pbo) {
-    if (pbo) {
+    if (pbo && *pbo) {
         // unregister this buffer object with CUDA
         cudaGraphicsUnregisterResource(pbo_resource);
 
-        glBindBuffer(GL_ARRAY_BUFFER, *pbo);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, *pbo);
         glDeleteBuffers(1, pbo);
 
         *pbo = (GLuint)NULL;
@@ -132,6 +132,20 @@ void initPBO() {
     glBufferData(GL_PIXEL_UNPACK_BUFFER, size_tex_data, NULL, GL_DYNAMIC_COPY);
 
     cudaGraphicsGLRegisterBuffer(&pbo_resource, pbo, cudaGraphicsMapFlagsWriteDiscard);
+}
+
+void resizeRenderTarget() {
+    cudaDeviceSynchronize();
+
+    deletePBO(&pbo);
+    initPBO();
+
+    glBindTexture(GL_TEXTURE_2D, displayImage);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+
+    if (window) {
+        glfwSetWindowSize(window, width, height);
+    }
 }
 
 void errorCallback(int error, const char* description) {

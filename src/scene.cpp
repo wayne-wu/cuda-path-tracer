@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <filesystem>
 #include <memory>  // c++11
 #include <random>
 #include "utilities.h"
@@ -19,6 +20,19 @@ static std::string GetFilePathExtension(const std::string& FileName) {
   if (FileName.find_last_of(".") != std::string::npos)
     return FileName.substr(FileName.find_last_of(".") + 1);
   return "";
+}
+
+static std::string ResolvePathFromSceneFile(const std::string& sceneFilename, const std::string& assetPath) {
+  namespace fs = std::filesystem;
+
+  fs::path asset(assetPath);
+  if (asset.is_absolute()) {
+    return fs::weakly_canonical(asset).string();
+  }
+
+  fs::path scenePath(sceneFilename);
+  fs::path sceneDir = scenePath.has_parent_path() ? scenePath.parent_path() : fs::current_path();
+  return fs::weakly_canonical(sceneDir / asset).string();
 }
 
 
@@ -49,7 +63,7 @@ Scene::Scene(string filename) {
                 loadCamera();
                 cout << " " << endl;
             } else if (strcmp(tokens[0].c_str(), "GLTF") == 0) {
-                loadGLTF(tokens[1], 3.0);
+                loadGLTF(ResolvePathFromSceneFile(filename, tokens[1]), 3.0);
                 cout << " " << endl;
             }
         }

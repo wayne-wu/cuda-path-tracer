@@ -19,6 +19,8 @@
 #include "intersections.h"
 #include "interactions.h"
 
+#include "OptixDenoiser.h"
+#include "optixCheck.h"
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
@@ -138,6 +140,10 @@ static PrimData dev_prim_data;
 // Denoising
 static glm::vec3* dev_denoised_image = NULL;
 static GBufferPixel* dev_gBuffer = NULL;
+static OptiXDenoiser* optixDenoiser = NULL;
+static OptixDeviceContext optixContext = nullptr;
+static OptixImage2D optixNoisyColor = {};
+static OptixImage2D optixDenoisedColor = {};
 
 #if TIMING
 static cudaEvent_t startEvent = NULL;
@@ -147,6 +153,57 @@ static cudaEvent_t endEvent = NULL;
 // Streams
 static cudaStream_t stream1 = NULL;
 static cudaStream_t stream2 = NULL;
+
+static void optixDenoiserLogCallback(unsigned int level, const char* tag, const char* message, void*) {
+    std::cerr << "[OptiX][" << level << "][" << tag << "] " << message << std::endl;
+}
+
+static void destroyOptixDenoiser() {
+    if (optixDenoiser) {
+        optixDenoiser->exit();
+        delete optixDenoiser;
+        optixDenoiser = NULL;
+    }
+
+    freeOptixImage2D(optixNoisyColor);
+    freeOptixImage2D(optixDenoisedColor);
+
+    if (optixContext) {
+        OPTIX_CHECK(optixDeviceContextDestroy(optixContext));
+        optixContext = nullptr;
+    }
+}
+
+static void initOptixDenoiser(const Camera& cam, cudaStream_t stream) {
+    OPTIX_CHECK(optixInit());
+
+    OptixDeviceContextOptions options = {};
+    options.logCallbackFunction = &optixDenoiserLogCallback;
+    options.logCallbackLevel = 4;
+
+    CUcontext cuCtx = 0;  // Use the current CUDA context.
+    OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &optixContext));
+
+    optixDenoiser = new OptiXDenoiser(optixDenoiserLogCallback, nullptr);
+    if (!optixDenoiser->init(
+            optixContext,
+            stream,
+            cam.resolution.x,
+            cam.resolution.y,
+            0,
+            0,
+            false,
+            false,
+            false,
+            false,
+            false)) {
+        std::cerr << "Failed to initialize OptiX denoiser" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    optixNoisyColor = createOptixImage2D(cam.resolution.x, cam.resolution.y, OPTIX_PIXEL_FORMAT_FLOAT4);
+    optixDenoisedColor = createOptixImage2D(cam.resolution.x, cam.resolution.y, OPTIX_PIXEL_FORMAT_FLOAT4);
+}
 
 
 template <class T>
@@ -251,6 +308,7 @@ void pathtraceInit(Scene *scene) {
 #endif
 
     // Denoising
+    initOptixDenoiser(cam, stream1);
     cudaMalloc(&dev_gBuffer, pixelcount * sizeof(GBufferPixel));
     cudaMalloc(&dev_denoised_image, pixelcount * sizeof(glm::vec3));
     cudaMemset(dev_denoised_image, 0, pixelcount * sizeof(glm::vec3));
@@ -259,14 +317,31 @@ void pathtraceInit(Scene *scene) {
 }
 
 void pathtraceFree() {
+    dev_paths = dev_paths_start;
+
     cudaFree(dev_image);  // no-op if dev_image is null
     cudaFree(dev_paths);
     cudaFree(dev_geoms);
+    cudaFree(dev_meshes);
     cudaFree(dev_materials);
     cudaFree(dev_intersections);
+    cudaFree(dev_texObjs);
 
     cudaFree(dev_gBuffer);
     cudaFree(dev_denoised_image);
+    destroyOptixDenoiser();
+
+    dev_image = NULL;
+    dev_paths = NULL;
+    dev_paths_start = NULL;
+    dev_geoms = NULL;
+    dev_meshes = NULL;
+    dev_materials = NULL;
+    dev_intersections = NULL;
+    dev_texObjs = NULL;
+    dev_gBuffer = NULL;
+    dev_denoised_image = NULL;
+    hst_scene = NULL;
 
     // Mesh GPU data free
     dev_prim_data.free();
@@ -275,9 +350,12 @@ void pathtraceFree() {
       cudaDestroyTextureObject(texObjs[i]);
       cudaFreeArray(dev_texArrays[i]);
     }
+    texObjs.clear();
+    dev_texArrays.clear();
 
 #if CACHE_FIRST_BOUNCE
     cudaFree(dev_first_intersections);
+    dev_first_intersections = NULL;
 #endif
     
 #if TIMING
@@ -285,11 +363,15 @@ void pathtraceFree() {
       cudaEventDestroy(startEvent);
     if (endEvent != NULL)
       cudaEventDestroy(endEvent);
+    startEvent = NULL;
+    endEvent = NULL;
 #endif
 
 #if CUDA_STREAM
     if(stream1) cudaStreamDestroy(stream1);
     if(stream2) cudaStreamDestroy(stream2);
+    stream1 = NULL;
+    stream2 = NULL;
 #endif
 
     checkCUDAError("pathtraceFree");
@@ -568,7 +650,29 @@ __global__ void normalizeImage(int width, int height, glm::vec3* image, int iter
   }
 }
 
-// Denoise Kernel
+__global__ void accumulatedImageToOptixInput(int width, int height, const glm::vec3* image, int iter, float4* optixImage) {
+  int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+  if (x < width && y < height) {
+    int index = x + (y * width);
+    glm::vec3 pix = image[index] / static_cast<float>(iter);
+    optixImage[index] = make_float4(pix.x, pix.y, pix.z, 1.0f);
+  }
+}
+
+__global__ void optixOutputToDenoisedImage(int width, int height, const float4* optixImage, glm::vec3* image) {
+  int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+  if (x < width && y < height) {
+    int index = x + (y * width);
+    float4 pix = optixImage[index];
+    image[index] = glm::vec3(pix.x, pix.y, pix.z);
+  }
+}
+
+// NOT USED: Denoise Kernel
 __global__ void kernDenoise(int width, int height, glm::vec3* image,
   int filterSize, GBufferPixel* gBuffer, int stepWidth, glm::mat4 camView, glm::mat4 camProj,
   float colorWeight, float normalWeight, float positionWeight) {
@@ -746,25 +850,33 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
     // Reset pointers to the start
     dev_paths = dev_paths_start;
 
-    //if (denoise) {
-    //  cudaMemcpy(dev_denoised_image, dev_image, pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
-    //  normalizeImage << <blocksPerGrid2d, blockSize2d >> > (cam.resolution.x, cam.resolution.y, dev_denoised_image, iter);
-    //  
-    //  for (int i = 0; i < filterPasses; i++) {
-    //    int stepWidth = 1;
-    //    while (4 * stepWidth <= filterSize) {
-    //      kernDenoise<<<blocksPerGrid2d, blockSize2d>>>(
-    //        cam.resolution.x,
-    //        cam.resolution.y,
-    //        dev_denoised_image, filterSize,
-    //        dev_gBuffer, stepWidth, cam.viewMat, cam.projMat,
-    //        colorWeight, normalWeight, positionWeight);
-    //      stepWidth <<= 1;
-    //    }
-    //  }
+    if (denoise) {
+      accumulatedImageToOptixInput<<<blocksPerGrid2d, blockSize2d, 0, stream1>>>(
+        cam.resolution.x,
+        cam.resolution.y,
+        dev_image,
+        iter,
+        reinterpret_cast<float4*>(optixNoisyColor.data));
+      checkCUDAError("Prepare OptiX denoiser input");
 
-    //  cudaMemcpy(dev_image, dev_denoised_image, pixelcount * sizeof(glm::vec3), cudaMemcpyDeviceToDevice);
-    //}
+      OptiXDenoiser::InputData inputData = {};
+      inputData.color = optixNoisyColor;
+
+      OptiXDenoiser::OutputData outputData = {};
+      outputData.color = optixDenoisedColor;
+
+      if (!optixDenoiser->denoise(outputData, inputData, stream1)) {
+        std::cerr << "OptiX denoiser invocation failed" << std::endl;
+        exit(EXIT_FAILURE);
+      }
+
+      optixOutputToDenoisedImage<<<blocksPerGrid2d, blockSize2d, 0, stream1>>>(
+        cam.resolution.x,
+        cam.resolution.y,
+        reinterpret_cast<const float4*>(optixDenoisedColor.data),
+        dev_denoised_image);
+      checkCUDAError("Read OptiX denoiser output");
+    }
 }
 
 
@@ -778,6 +890,7 @@ void showGBuffer(uchar4* pbo, int mode) {
 
   // CHECKITOUT: process the gbuffer results and send them to OpenGL buffer for visualization
   gbufferToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, dev_gBuffer, mode);
+  checkCUDAError("send gbuffer to PBO");
 }
 
 void showImage(uchar4* pbo, int iter, bool denoise) {
@@ -789,4 +902,5 @@ void showImage(uchar4* pbo, int iter, bool denoise) {
 
   // Send results to OpenGL buffer for rendering
   sendImageToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, denoise? 1 : iter, denoise ? dev_denoised_image : dev_image);
+  checkCUDAError("send image to PBO");
 }
