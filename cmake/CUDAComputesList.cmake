@@ -37,7 +37,7 @@ IF(CUDA_COMPUTE_DETECT AND NOT DEFINED COMPUTES_DETECTED_LIST)
         IF(COMPILE_RESULT_VAR AND RUN_RESULT_VAR EQUAL 0)
             MESSAGE(STATUS "CUDA Compute Detection Worked")
             # Convert output into a list of computes
-            STRING(REPLACE " " ";" COMPUTES_DETECTED_LIST ${RUN_OUTPUT_VAR})
+            STRING(REPLACE " " ";" COMPUTES_DETECTED_LIST "${RUN_OUTPUT_VAR}")
             SET(CUDA_HAVE_GPU TRUE CACHE BOOL "Whether CUDA-capable GPU is present")
         ELSE()
             MESSAGE(STATUS "CUDA Compute Detection Failed")

@@ -10,8 +10,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# Enable C++11 for host code
-set(CMAKE_CXX_STANDARD 11)
+# CUDA 13.x's bundled CCCL/Thrust requires at least C++17.
+set(CMAKE_CXX_STANDARD 17)
 
 # Set a default build type if none was specified
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -23,15 +23,25 @@ endif()
 ########################################
 # CUDA Setup
 ########################################
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+    message(FATAL_ERROR
+        "This project must be configured for 64-bit on Windows. "
+        "The current generator platform is Win32, but the installed CUDA toolkit only provides "
+        "64-bit runtime libraries such as lib/x64/cudart.lib. "
+        "In VS Code, select an x64 Visual Studio kit/generator or reconfigure with '-A x64'.")
+endif()
+
 find_package(CUDA 10 REQUIRED)
 include(${CMAKE_MODULE_PATH}/CUDAComputesList.cmake)
 
 list(APPEND CUDA_NVCC_FLAGS ${CUDA_GENERATE_CODE})
 list(APPEND CUDA_NVCC_FLAGS_DEBUG "-g -G")
+list(APPEND CUDA_NVCC_FLAGS "--std=c++17")
 set(CUDA_VERBOSE_BUILD ON)
 
 if(WIN32)
     # Set up include and lib paths
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:preprocessor")
     set(CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER} CACHE FILEPATH "Host side compiler used by NVCC" FORCE)
     include_directories(external/include/ImGuiFileDialog/dirent)
 endif(WIN32)
