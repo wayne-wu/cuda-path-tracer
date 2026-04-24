@@ -235,10 +235,8 @@ struct ShadeableIntersection {
 };
 
 struct GBufferPixel {
-  float t;
-  glm::vec3 n;  //normal
-  glm::vec3 p;  //position
-  float z;      //z-depth
+  glm::vec3 n;       // normal
+  glm::vec3 albedo;  // base color
 };
 
 
