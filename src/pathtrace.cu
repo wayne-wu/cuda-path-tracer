@@ -82,30 +82,14 @@ __global__ void gbufferToPBO(uchar4* pbo, glm::ivec2 resolution, GBufferPixel* g
 
     switch (mode) {
     case GBUFFER_TIME:
-      float timeToIntersect = gBuffer[index].t * 256.0;
-
+    case GBUFFER_POSITION: {
+      glm::vec3 albedo = glm::clamp(gBuffer[index].albedo, glm::vec3(0.0f), glm::vec3(1.0f));
       pbo[index].w = 0;
-      pbo[index].x = timeToIntersect;
-      pbo[index].y = timeToIntersect;
-      pbo[index].z = timeToIntersect;
+      pbo[index].x = static_cast<unsigned char>(albedo.x * 255.0f);
+      pbo[index].y = static_cast<unsigned char>(albedo.y * 255.0f);
+      pbo[index].z = static_cast<unsigned char>(albedo.z * 255.0f);
       break;
-
-    case GBUFFER_POSITION:
-      if (COMPACT_GBUFFER) {
-        float z = abs(gBuffer[index].z) * 256.0f;
-        pbo[index].w = 0;
-        pbo[index].x = z;
-        pbo[index].y = z;
-        pbo[index].z = z;
-      }
-      else {
-        glm::vec3 pos = 0.1f * gBuffer[index].p * 256.0f;
-        pbo[index].w = 0;
-        pbo[index].x = abs(pos.x);
-        pbo[index].y = abs(pos.y);
-        pbo[index].z = abs(pos.z);
-      }
-      break;
+    }
 
     case GBUFFER_NORMAL:
       glm::vec3 n = gBuffer[index].n;
@@ -144,6 +128,8 @@ static OptiXDenoiser* optixDenoiser = NULL;
 static OptixDeviceContext optixContext = nullptr;
 static OptixImage2D optixNoisyColor = {};
 static OptixImage2D optixDenoisedColor = {};
+static OptixImage2D optixAlbedoGuide = {};
+static OptixImage2D optixNormalGuide = {};
 
 #if TIMING
 static cudaEvent_t startEvent = NULL;
@@ -167,6 +153,8 @@ static void destroyOptixDenoiser() {
 
     freeOptixImage2D(optixNoisyColor);
     freeOptixImage2D(optixDenoisedColor);
+    freeOptixImage2D(optixAlbedoGuide);
+    freeOptixImage2D(optixNormalGuide);
 
     if (optixContext) {
         OPTIX_CHECK(optixDeviceContextDestroy(optixContext));
@@ -193,8 +181,8 @@ static void initOptixDenoiser(const Camera& cam, cudaStream_t stream) {
             0,
             0,
             false,
-            false,
-            false,
+            true,
+            true,
             false,
             false)) {
         std::cerr << "Failed to initialize OptiX denoiser" << std::endl;
@@ -203,6 +191,8 @@ static void initOptixDenoiser(const Camera& cam, cudaStream_t stream) {
 
     optixNoisyColor = createOptixImage2D(cam.resolution.x, cam.resolution.y, OPTIX_PIXEL_FORMAT_FLOAT4);
     optixDenoisedColor = createOptixImage2D(cam.resolution.x, cam.resolution.y, OPTIX_PIXEL_FORMAT_FLOAT4);
+    optixAlbedoGuide = createOptixImage2D(cam.resolution.x, cam.resolution.y, OPTIX_PIXEL_FORMAT_FLOAT4);
+    optixNormalGuide = createOptixImage2D(cam.resolution.x, cam.resolution.y, OPTIX_PIXEL_FORMAT_FLOAT4);
 }
 
 
@@ -597,16 +587,29 @@ __global__ void shadeFakeMaterial (
 __global__ void generateGBuffer(
   int num_paths,
   ShadeableIntersection* shadeableIntersections,
-  PathSegment* pathSegments,
   GBufferPixel* gBuffer,
-  glm::mat4 camView) {
+  Material* materials,
+  cudaTextureObject_t* textures) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < num_paths)
   {
-    gBuffer[idx].t = shadeableIntersections[idx].t;
-    gBuffer[idx].n = shadeableIntersections[idx].surfaceNormal;
-    glm::vec3 point = getPointOnRay(pathSegments[idx].ray, shadeableIntersections[idx].t);
-    gBuffer[idx].p = point;
+    const ShadeableIntersection& intersection = shadeableIntersections[idx];
+
+    if (intersection.t <= 0.0f) {
+      gBuffer[idx].n = glm::vec3(0.0f);
+      gBuffer[idx].albedo = glm::vec3(0.0f);
+      return;
+    }
+
+    gBuffer[idx].n = glm::normalize(intersection.surfaceNormal);
+
+    const Material& material = materials[intersection.materialId];
+    int txId = material.tex_offset + material.pbrMetallicRoughness.baseColorTexture.index;
+    if (txId < 0) {
+      gBuffer[idx].albedo = material.pbrMetallicRoughness.baseColorFactor;
+    } else {
+      gBuffer[idx].albedo = sampleTexture(textures[txId], intersection.uv);
+    }
   }
 }
 
@@ -650,14 +653,35 @@ __global__ void normalizeImage(int width, int height, glm::vec3* image, int iter
   }
 }
 
-__global__ void accumulatedImageToOptixInput(int width, int height, const glm::vec3* image, int iter, float4* optixImage) {
+__global__ void stageOptixDenoiserInputs(
+  int width,
+  int height,
+  const glm::vec3* image,
+  int iter,
+  const GBufferPixel* gBuffer,
+  float4* optixColor,
+  float4* optixAlbedo,
+  float4* optixNormal) {
   int x = (blockIdx.x * blockDim.x) + threadIdx.x;
   int y = (blockIdx.y * blockDim.y) + threadIdx.y;
 
   if (x < width && y < height) {
     int index = x + (y * width);
-    glm::vec3 pix = image[index] / static_cast<float>(iter);
-    optixImage[index] = make_float4(pix.x, pix.y, pix.z, 1.0f);
+
+    glm::vec3 color = image[index] / static_cast<float>(iter);
+    optixColor[index] = make_float4(color.x, color.y, color.z, 1.0f);
+
+    glm::vec3 albedo = glm::clamp(gBuffer[index].albedo, glm::vec3(0.0f), glm::vec3(1.0f));
+    optixAlbedo[index] = make_float4(albedo.x, albedo.y, albedo.z, 1.0f);
+
+    glm::vec3 n = gBuffer[index].n;
+    if (glm::length2(n) == 0.0f) {
+      optixNormal[index] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    else {
+      n = glm::normalize(n);
+      optixNormal[index] = make_float4(n.x, n.y, n.z, 0.0f);
+    }
   }
 }
 
@@ -710,8 +734,8 @@ __global__ void kernDenoise(int width, int height, glm::vec3* image,
 #if USE_GBUFFER
           float c_w = calculateWeight(image[index], image[idx], colorWeight);
           float n_w = calculateWeight(gBuffer[index].n, gBuffer[idx].n, normalWeight);
-          float p_w = calculateWeight(gBuffer[index].p, gBuffer[idx].p, positionWeight);
-          weight = c_w * n_w * p_w;
+          float a_w = calculateWeight(gBuffer[index].albedo, gBuffer[idx].albedo, positionWeight);
+          weight = c_w * n_w * a_w;
 #endif
 
           float ker = kernel[i + 2][j + 2];
@@ -730,7 +754,8 @@ __global__ void kernDenoise(int width, int height, glm::vec3* image,
  * Wrapper for the __global__ call that sets up the kernel calls and does a ton
  * of memory management
  */
-void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPasses, float colorWeight, float normalWeight, float positionWeight) {
+void pathtrace(int frame, int iter, bool denoise) 
+{
     const int traceDepth = hst_scene->state.traceDepth;
     const Camera &cam = hst_scene->state.camera;
     const int pixelcount = cam.resolution.x * cam.resolution.y;
@@ -795,9 +820,14 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
         intersections = dev_intersections;
       }
 
-      //if (denoise && depth == 0) {
-      //  generateGBuffer<<<numblocksPathSegmentTracing, blockSize1d>>> (num_paths, intersections, dev_paths, dev_gBuffer, cam.viewMat);
-      //}
+      if (denoise && depth == 0) {
+        generateGBuffer<<<numblocksPathSegmentTracing, blockSize1d>>>(
+          num_paths,
+          intersections,
+          dev_gBuffer,
+          dev_materials,
+          dev_texObjs);
+      }
 
 #if TIMING
       cudaEventRecord(startEvent);
@@ -851,16 +881,21 @@ void pathtrace(int frame, int iter, bool denoise, int filterSize, int filterPass
     dev_paths = dev_paths_start;
 
     if (denoise) {
-      accumulatedImageToOptixInput<<<blocksPerGrid2d, blockSize2d, 0, stream1>>>(
+      stageOptixDenoiserInputs<<<blocksPerGrid2d, blockSize2d, 0, stream1>>>(
         cam.resolution.x,
         cam.resolution.y,
         dev_image,
         iter,
-        reinterpret_cast<float4*>(optixNoisyColor.data));
-      checkCUDAError("Prepare OptiX denoiser input");
+        dev_gBuffer,
+        reinterpret_cast<float4*>(optixNoisyColor.data),
+        reinterpret_cast<float4*>(optixAlbedoGuide.data),
+        reinterpret_cast<float4*>(optixNormalGuide.data));
+      checkCUDAError("Prepare OptiX denoiser inputs");
 
       OptiXDenoiser::InputData inputData = {};
       inputData.color = optixNoisyColor;
+      inputData.albedo = optixAlbedoGuide;
+      inputData.normal = optixNormalGuide;
 
       OptiXDenoiser::OutputData outputData = {};
       outputData.color = optixDenoisedColor;

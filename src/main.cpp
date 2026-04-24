@@ -19,11 +19,6 @@ string lastSceneFile = "";
 bool ui_showGbuffer = false;
 int ui_GbufferMode = GBUFFER_NORMAL;  //switch between different gbuffers
 bool ui_denoise = true;
-int ui_filterSize = 80;
-int ui_filterPasses = 1;
-float ui_colorWeight = 0.166f;
-float ui_normalWeight = 0.442f;
-float ui_positionWeight = 0.166f;
 bool ui_saveAndExit = false;
 string ui_sceneFile = "";
 
@@ -78,9 +73,6 @@ void loadScene(string sceneFile) {
     Camera &cam = renderState->camera;
     width = cam.resolution.x;
     height = cam.resolution.y;
-
-    ui_iterations = renderState->iterations;
-    startupIterations = ui_iterations;
 
     glm::vec3 view = cam.view;
     glm::vec3 up = cam.up;
@@ -190,7 +182,7 @@ void runCuda() {
       // execute the kernel
       int frame = 0;
       denoise = ui_denoise && iteration == ui_iterations;  // only denoise after the last iteration
-      pathtrace(frame, iteration, denoise, ui_filterSize, ui_filterPasses, ui_colorWeight, ui_normalWeight, ui_positionWeight);
+      pathtrace(frame, iteration, denoise);
     }
 
     if (ui_showGbuffer) {
