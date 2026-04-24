@@ -40,12 +40,19 @@ struct Mesh {
     int prim_offset;
 };
 
+struct Triangle {
+    Vec3 v0;
+    Vec3 v1;
+    Vec3 v2;
+};
+
 struct Primitive {
     // number of points
     int count;
     int num_vertices;
     Offset i_offset;
     Offset v_offset;
+    Offset face_offset = -1;
     Offset bin_offset = -1;
     Offset bf_offset = -1;
     Offset n_offset = -1;
@@ -69,6 +76,7 @@ struct Bin {
 
 struct PrimData {
     Primitive* primitives;
+    Triangle* triangles;
     glm::vec3* vertices;
     glm::vec3* normals;
     uint16_t* indices;
@@ -81,6 +89,7 @@ struct PrimData {
 
     void free() {
       cudaFree(primitives);
+      cudaFree(triangles);
       cudaFree(vertices);
       cudaFree(normals);
       cudaFree(indices);
@@ -91,6 +100,7 @@ struct PrimData {
       if (binFaces) cudaFree(binFaces);
 
       primitives = NULL;
+      triangles = NULL;
       vertices = NULL;
       normals = NULL;
       indices = NULL;

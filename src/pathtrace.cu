@@ -265,6 +265,7 @@ void pathtraceInit(Scene *scene) {
 
     // Mesh GPU data malloc
     mallocAndCopy<Primitive>(dev_prim_data.primitives, scene->primitives);
+    mallocAndCopy<Triangle>(dev_prim_data.triangles, scene->mesh_faces);
     mallocAndCopy<uint16_t>(dev_prim_data.indices, scene->mesh_indices);
     mallocAndCopy<glm::vec3>(dev_prim_data.vertices, scene->mesh_vertices);
     mallocAndCopy<glm::vec3>(dev_prim_data.normals, scene->mesh_normals);
@@ -417,13 +418,7 @@ __global__ void traceClosestHits(
     , Hit * hits
 )
 {
-    extern __shared__ Primitive prims[];
     int path_index = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (threadIdx.x < num_prims)
-      prims[threadIdx.x] = mesh_data.primitives[threadIdx.x];
-
-    __syncthreads();
 
     if (path_index < num_paths)
     {
@@ -467,7 +462,7 @@ __global__ void traceClosestHits(
             else if (geom.type == MESH)
             {
               Hit candidateHit;
-              if (meshIntersectionTest(geom, meshes[geom.meshid], prims, mesh_data, pathSegment.ray, candidateHit)) {
+              if (meshIntersectionTest(geom, meshes[geom.meshid], mesh_data.primitives, mesh_data, pathSegment.ray, candidateHit)) {
                   if (hit.t < 0.0f || candidateHit.t < hit.t) {
                     hit = candidateHit;
                     hit.geomId = i;
@@ -490,13 +485,7 @@ __global__ void resolveHitData(
     , ShadeableIntersection * intersections
 )
 {
-    extern __shared__ Primitive prims[];
     int path_index = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (threadIdx.x < num_prims)
-      prims[threadIdx.x] = mesh_data.primitives[threadIdx.x];
-
-    __syncthreads();
 
     if (path_index >= num_paths) {
       return;
@@ -520,7 +509,7 @@ __global__ void resolveHitData(
     Vec3 pointWS(0.0f);
 
     if (geom.type == MESH) {
-      const Primitive& prim = prims[hit.primId];
+      const Primitive& prim = mesh_data.primitives[hit.primId];
       computeFaceInfo(mesh_data, prim, hit.faceId, hit.bary,
         intersection.surfaceNormal, intersection.uv, intersection.tangent);
 
@@ -877,7 +866,7 @@ void pathtrace(int frame, int iter, bool denoise)
 
       if (intersections == NULL) {
         int num_prims = hst_scene->primitives.size();
-        traceClosestHits<<<numblocksPathSegmentTracing, blockSize1d, num_prims * sizeof(Primitive), stream1>>>(
+        traceClosestHits<<<numblocksPathSegmentTracing, blockSize1d, 0, stream1>>>(
           num_paths
           , num_prims
           , hst_scene->geoms.size()
@@ -886,7 +875,7 @@ void pathtrace(int frame, int iter, bool denoise)
           , dev_meshes
           , dev_prim_data
           , dev_hits);
-        resolveHitData<<<numblocksPathSegmentTracing, blockSize1d, num_prims * sizeof(Primitive), stream1>>>(
+        resolveHitData<<<numblocksPathSegmentTracing, blockSize1d, 0, stream1>>>(
           num_paths
           , num_prims
           , dev_paths

@@ -205,11 +205,8 @@ __host__ __device__ bool intersectBox(const Ray& r, const glm::vec3& v_min, cons
 
 __host__ __device__ bool intersectFace(const PrimData& md, const Primitive& m, const Ray& r,
                               int faceIdx, Vec3& bary) {
-  int i = 3 * faceIdx;
-  return glm::intersectRayTriangle(r.origin, r.direction,
-    md.vertices[m.v_offset + md.indices[m.i_offset + i++]],
-    md.vertices[m.v_offset + md.indices[m.i_offset + i++]],
-    md.vertices[m.v_offset + md.indices[m.i_offset + i]], bary);
+  const Triangle& tri = md.triangles[m.face_offset + faceIdx];
+  return glm::intersectRayTriangle(r.origin, r.direction, tri.v0, tri.v1, tri.v2, bary);
 }
 
 /*
@@ -317,10 +314,31 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
           binInfo = md.bins[bo + bin];
 
           if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z) && bary.z < closestObjectT) {
-            if (binInfo.childIndex != -1)  // check if has more children
+            if (binInfo.childIndex != -1) {  // check if has more children
+              int childBins[8];
+              float childTs[8];
+              int childCount = 0;
+
               for (int i = binInfo.childIndex; i < binInfo.childIndex + 8; ++i) {
-                *stackPtr++ = i;  // push children bins to stack
+                const Bin& child = md.bins[bo + i];
+                float childT;
+                if (intersectBox(r, child.bbox_min, child.bbox_max, childT) && childT < closestObjectT) {
+                  int insertPos = childCount;
+                  while (insertPos > 0 && childTs[insertPos - 1] < childT) {
+                    childTs[insertPos] = childTs[insertPos - 1];
+                    childBins[insertPos] = childBins[insertPos - 1];
+                    --insertPos;
+                  }
+                  childTs[insertPos] = childT;
+                  childBins[insertPos] = i;
+                  ++childCount;
+                }
               }
+
+              for (int i = 0; i < childCount; ++i) {
+                *stackPtr++ = childBins[i];  // push farthest first so nearest is popped next
+              }
+            }
             else if (binInfo.startIndex >= 0) { 
               for (int b = binInfo.startIndex; b < binInfo.endIndex; ++b) {
                 int faceIdx = md.binFaces[m.bf_offset + b];

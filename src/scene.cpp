@@ -588,6 +588,19 @@ int Scene::loadGLTF(const std::string& filename, float scale) {
           break;
       }
 
+      prim.face_offset = mesh_faces.size();
+      const int numFaces = prim.count / 3;
+      for (int faceIdx = 0; faceIdx < numFaces; ++faceIdx) {
+        const int i0 = indices[3 * faceIdx + 0];
+        const int i1 = indices[3 * faceIdx + 1];
+        const int i2 = indices[3 * faceIdx + 2];
+        Triangle tri;
+        tri.v0 = mesh_vertices[prim.v_offset + i0];
+        tri.v1 = mesh_vertices[prim.v_offset + i1];
+        tri.v2 = mesh_vertices[prim.v_offset + i2];
+        mesh_faces.push_back(tri);
+      }
+
       primitives.push_back(prim);
     }
 

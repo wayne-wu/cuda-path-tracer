@@ -32,6 +32,7 @@ public:
 
     std::vector<Mesh>      meshes;
     std::vector<Primitive> primitives;
+    std::vector<Triangle>  mesh_faces;
 
     // Primitive Data
     Indices  mesh_indices;
