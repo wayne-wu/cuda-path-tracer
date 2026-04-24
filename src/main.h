@@ -42,6 +42,7 @@ extern float ui_colorWeight;
 extern float ui_normalWeight;
 extern float ui_positionWeight;
 extern bool ui_saveAndExit;
+extern double ui_autoExitSeconds;
 extern string ui_sceneFile;
 
 extern cudaGraphicsResource_t pbo_resource;

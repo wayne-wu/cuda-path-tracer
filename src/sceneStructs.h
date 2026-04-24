@@ -219,18 +219,18 @@ struct Hit {
   int binId = -1;
   int faceId = -1;
   Vec3 bary;
+  float t = -1.0f;  // world-space t
 };
 
 // Use with a corresponding PathSegment to do:
 // 1) color contribution computation
 // 2) BSDF evaluation: generate a new ray
 struct ShadeableIntersection {
-  float t;
   int materialId;
   glm::vec3 surfaceNormal;
   glm::vec2 uv;
   glm::vec4 tangent;
-  Hit hit;
+  float t;  // world space t
   int padding;
 };
 

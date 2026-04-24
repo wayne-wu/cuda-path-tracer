@@ -20,6 +20,7 @@ bool ui_showGbuffer = false;
 int ui_GbufferMode = GBUFFER_NORMAL;  //switch between different gbuffers
 bool ui_denoise = true;
 bool ui_saveAndExit = false;
+double ui_autoExitSeconds = -1.0;
 string ui_sceneFile = "";
 
 cudaGraphicsResource_t pbo_resource;
@@ -46,11 +47,22 @@ int height = 800;
 int main(int argc, char** argv) {
     startTimeString = currentTimeString();
 
-    if (argc == 2) {
-      const char* startScene = argv[1];
-
-      loadScene(startScene);
-      lastSceneFile = ui_sceneFile = startScene;
+    for (int i = 1; i < argc; ++i) {
+      if (std::strcmp(argv[i], "--auto-exit-seconds") == 0) {
+        if (i + 1 >= argc) {
+          std::cerr << "Missing value for --auto-exit-seconds" << std::endl;
+          return EXIT_FAILURE;
+        }
+        ui_autoExitSeconds = std::atof(argv[++i]);
+      }
+      else if (ui_sceneFile.empty()) {
+        loadScene(argv[i]);
+        lastSceneFile = ui_sceneFile = argv[i];
+      }
+      else {
+        std::cerr << "Unrecognized argument: " << argv[i] << std::endl;
+        return EXIT_FAILURE;
+      }
     }
 
     // Initialize CUDA and GL components

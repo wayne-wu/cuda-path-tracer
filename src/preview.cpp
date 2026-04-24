@@ -279,6 +279,9 @@ void mainLoop() {
     //time_point_t time_end_cpu;
     //time_start_cpu = std::chrono::high_resolution_clock::now();
     while (window && !glfwWindowShouldClose(window)) {
+        if (ui_autoExitSeconds > 0.0 && glfwGetTime() >= ui_autoExitSeconds) {
+            glfwSetWindowShouldClose(window, GL_TRUE);
+        }
         glfwPollEvents();
         runCuda();
 

@@ -112,6 +112,7 @@ static PathSegment * dev_paths = NULL;
 static PathSegment * dev_paths_start = NULL;
 static ShadeableIntersection * dev_intersections = NULL;
 static ShadeableIntersection * dev_first_intersections = NULL;
+static Hit * dev_hits = NULL;
 
 // Texture Data
 static cudaTextureObject_t * dev_texObjs = NULL;
@@ -255,6 +256,9 @@ void pathtraceInit(Scene *scene) {
     cudaMalloc(&dev_intersections, pixelcount * sizeof(ShadeableIntersection));
     cudaMemset(dev_intersections, 0, pixelcount * sizeof(ShadeableIntersection));
 
+    cudaMalloc(&dev_hits, pixelcount * sizeof(Hit));
+    cudaMemset(dev_hits, 0, pixelcount * sizeof(Hit));
+
     mallocAndCopy<Geom>(dev_geoms, scene->geoms);
     mallocAndCopy<Material>(dev_materials, scene->materials);
     mallocAndCopy<Mesh>(dev_meshes, scene->meshes);
@@ -315,6 +319,7 @@ void pathtraceFree() {
     cudaFree(dev_meshes);
     cudaFree(dev_materials);
     cudaFree(dev_intersections);
+    cudaFree(dev_hits);
     cudaFree(dev_texObjs);
 
     cudaFree(dev_gBuffer);
@@ -328,6 +333,7 @@ void pathtraceFree() {
     dev_meshes = NULL;
     dev_materials = NULL;
     dev_intersections = NULL;
+    dev_hits = NULL;
     dev_texObjs = NULL;
     dev_gBuffer = NULL;
     dev_denoised_image = NULL;
@@ -398,11 +404,9 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
     }
 }
 
-// TODO:
-// computeIntersections handles generating ray intersections ONLY.
-// Generating new rays is handled in your shader(s).
-// Feel free to modify the code below.
-__global__ void computeIntersections(
+
+// Traversal/search
+__global__ void traceClosestHits(
       int num_paths
     , int num_prims
     , int num_geoms
@@ -410,8 +414,8 @@ __global__ void computeIntersections(
     , Geom * geoms
     , Mesh * meshes
     , PrimData mesh_data
-    , ShadeableIntersection * intersections
-    )
+    , Hit * hits
+)
 {
     extern __shared__ Primitive prims[];
     int path_index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -423,58 +427,137 @@ __global__ void computeIntersections(
 
     if (path_index < num_paths)
     {
-        PathSegment pathSegment = pathSegments[path_index];
-
-        float t;
-        ShadeableIntersection intersection;
-        intersection.t = FLT_MAX;
-        bool hit = false;
-        bool outside = true;
-
-        // TODO: Maybe just create a temp ShadeableIntersection object
-        glm::vec3 tmp_intersect;
+        const PathSegment& pathSegment = pathSegments[path_index];
+        Hit hit;
 
         // naive parse through global geoms
         for (int i = 0; i < num_geoms; i++)
         {
-            Geom & geom = geoms[i];
-
+            const Geom& geom = geoms[i];
             if (geom.type == CUBE)
             {
-                t = boxIntersectionTest(geom, pathSegment.ray, tmp_intersect, intersection.surfaceNormal, outside);
-                if (t > 0.f && t < intersection.t) {
-                  intersection.hit.geomId = i;
-                  intersection.t = t;
-                  intersection.materialId = geom.materialid;
-                  hit = true;
+                const float t = boxIntersectionTest(geom, pathSegment.ray);
+                if (t > 0.f) {
+                  Vec3 pointWS;
+                  Vec3 normalWS;
+                  resolveBoxHitData(geom, pathSegment.ray, t, pointWS, normalWS);
+                  const float worldT = glm::length(pathSegment.ray.origin - pointWS);
+                  if (hit.t < 0.0f || worldT < hit.t) {
+                    hit = Hit();
+                    hit.geomId = i;
+                    hit.t = worldT;
+                  }
                 }
             }
             else if (geom.type == SPHERE)
             {
-                t = sphereIntersectionTest(geom, pathSegment.ray, tmp_intersect, intersection.surfaceNormal, outside);
-                if (t > 0.f && t < intersection.t) {
-                  intersection.hit.geomId = i;
-                  intersection.t = t;
-                  intersection.materialId = geom.materialid;
-                  hit = true;
+                const float t = sphereIntersectionTest(geom, pathSegment.ray);
+                if (t > 0.f) {
+                  Vec3 pointWS;
+                  Vec3 normalWS;
+                  resolveSphereHitData(geom, pathSegment.ray, t, pointWS, normalWS);
+                  const float worldT = glm::length(pathSegment.ray.origin - pointWS);
+                  if (hit.t < 0.0f || worldT < hit.t) {
+                    hit = Hit();
+                    hit.geomId = i;
+                    hit.t = worldT;
+                  }
                 }
             }
             else if (geom.type == MESH)
             {
-              if (meshIntersectionTest(geom, meshes[geom.meshid], prims, mesh_data, pathSegment.ray, intersection))
-              {
-                  intersection.hit.geomId = i;
-                  hit = true;
+              Hit candidateHit;
+              if (meshIntersectionTest(geom, meshes[geom.meshid], prims, mesh_data, pathSegment.ray, candidateHit)) {
+                  if (hit.t < 0.0f || candidateHit.t < hit.t) {
+                    hit = candidateHit;
+                    hit.geomId = i;
+                  }
               }
             }
-            // TODO: add more intersection tests here... triangle? metaball? CSG?
-
         }
 
-        intersection.t = hit ? intersection.t : -1.f;
-
-        intersections[path_index] = intersection;
+        hits[path_index] = hit;
     }
+}
+
+__global__ void resolveHitData(
+      int num_paths
+    , int num_prims
+    , PathSegment * pathSegments
+    , Geom * geoms
+    , PrimData mesh_data
+    , Hit * hits
+    , ShadeableIntersection * intersections
+)
+{
+    extern __shared__ Primitive prims[];
+    int path_index = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (threadIdx.x < num_prims)
+      prims[threadIdx.x] = mesh_data.primitives[threadIdx.x];
+
+    __syncthreads();
+
+    if (path_index >= num_paths) {
+      return;
+    }
+
+    const Ray& ray = pathSegments[path_index].ray;
+    const Hit& hit = hits[path_index];
+    ShadeableIntersection intersection;
+    intersection.materialId = -1;
+    intersection.surfaceNormal = glm::vec3(0.0f);
+    intersection.uv = glm::vec2(0.0f);
+    intersection.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    intersection.t = -1.0f;
+
+    if (hit.geomId < 0 || hit.t <= 0.0f) {
+      intersections[path_index] = intersection;
+      return;
+    }
+
+    const Geom& geom = geoms[hit.geomId];
+    Vec3 pointWS(0.0f);
+
+    if (geom.type == MESH) {
+      const Primitive& prim = prims[hit.primId];
+      computeFaceInfo(mesh_data, prim, hit.faceId, hit.bary,
+        intersection.surfaceNormal, intersection.uv, intersection.tangent);
+
+      intersection.surfaceNormal = glm::normalize(
+        multiplyMV0(geom.invTranspose, intersection.surfaceNormal));
+      intersection.tangent = glm::vec4(
+        glm::normalize(multiplyMV0(geom.invTranspose, glm::vec3(intersection.tangent))),
+        intersection.tangent.w);
+      intersection.materialId = prim.mat_id;
+      pointWS = getPointOnRay(ray, hit.t);
+    }
+    else if (geom.type == CUBE) {
+      const float objectT = boxIntersectionTest(geom, ray);
+      resolveBoxHitData(geom, ray, objectT, pointWS, intersection.surfaceNormal);
+      const Vec3 tangentDir = glm::abs(intersection.surfaceNormal.x) > 0.9f
+        ? Vec3(0.0f, 1.0f, 0.0f)
+        : Vec3(1.0f, 0.0f, 0.0f);
+      intersection.tangent = glm::vec4(glm::normalize(glm::cross(tangentDir, intersection.surfaceNormal)), 1.0f);
+      intersection.materialId = geom.materialid;
+    }
+    else if (geom.type == SPHERE) {
+      const float objectT = sphereIntersectionTest(geom, ray);
+      resolveSphereHitData(geom, ray, objectT, pointWS, intersection.surfaceNormal);
+      const Vec3 tangentDir = glm::abs(intersection.surfaceNormal.x) > 0.9f
+        ? Vec3(0.0f, 1.0f, 0.0f)
+        : Vec3(1.0f, 0.0f, 0.0f);
+      intersection.tangent = glm::vec4(glm::normalize(glm::cross(tangentDir, intersection.surfaceNormal)), 1.0f);
+      intersection.materialId = geom.materialid;
+    }
+
+    if (glm::dot(ray.direction, intersection.surfaceNormal) > 0.0f) {
+      intersection.surfaceNormal = -intersection.surfaceNormal;
+      intersection.tangent.w = -intersection.tangent.w;
+    }
+
+    intersection.t = hit.t;
+    intersections[path_index] = intersection;
 }
 
 __global__ void shadeBSDF(
@@ -794,7 +877,7 @@ void pathtrace(int frame, int iter, bool denoise)
 
       if (intersections == NULL) {
         int num_prims = hst_scene->primitives.size();
-        computeIntersections << <numblocksPathSegmentTracing, blockSize1d, num_prims*sizeof(Primitive), stream1 >> > (
+        traceClosestHits<<<numblocksPathSegmentTracing, blockSize1d, num_prims * sizeof(Primitive), stream1>>>(
           num_paths
           , num_prims
           , hst_scene->geoms.size()
@@ -802,6 +885,14 @@ void pathtrace(int frame, int iter, bool denoise)
           , dev_geoms
           , dev_meshes
           , dev_prim_data
+          , dev_hits);
+        resolveHitData<<<numblocksPathSegmentTracing, blockSize1d, num_prims * sizeof(Primitive), stream1>>>(
+          num_paths
+          , num_prims
+          , dev_paths
+          , dev_geoms
+          , dev_prim_data
+          , dev_hits
           , dev_intersections);
         checkCUDAError("Compute Intersections");
         

@@ -75,16 +75,13 @@ __host__ __device__ glm::vec3 multiplyMV0(glm::mat4 m, glm::vec3 v) {
  * @param outside            Output param for whether the ray came from outside.
  * @return                   Ray parameter `t` value. -1 if no intersection.
  */
-__host__ __device__ float boxIntersectionTest(Geom& box, Ray& r,
-        glm::vec3 &intersectionPoint, glm::vec3 &normal, bool &outside) {
+__host__ __device__ float boxIntersectionTest(const Geom& box, const Ray& r) {
     Ray q;
     q.origin    =                multiplyMV(box.inverseTransform, glm::vec4(r.origin   , 1.0f));
     q.direction = glm::normalize(multiplyMV(box.inverseTransform, glm::vec4(r.direction, 0.0f)));
 
     float tmin = -1e38f;
     float tmax = 1e38f;
-    glm::vec3 tmin_n;
-    glm::vec3 tmax_n;
     for (int xyz = 0; xyz < 3; ++xyz) {
         float qdxyz = q.direction[xyz];
         /*if (glm::abs(qdxyz) > 0.00001f)*/ {
@@ -92,29 +89,20 @@ __host__ __device__ float boxIntersectionTest(Geom& box, Ray& r,
             float t2 = (+0.5f - q.origin[xyz]) / qdxyz;
             float ta = glm::min(t1, t2);
             float tb = glm::max(t1, t2);
-            glm::vec3 n;
-            n[xyz] = t2 < t1 ? +1 : -1;
             if (ta > 0 && ta > tmin) {
                 tmin = ta;
-                tmin_n = n;
             }
             if (tb < tmax) {
                 tmax = tb;
-                tmax_n = n;
             }
         }
     }
 
     if (tmax >= tmin && tmax > 0) {
-        outside = true;
         if (tmin <= 0) {
             tmin = tmax;
-            tmin_n = tmax_n;
-            outside = false;
         }
-        intersectionPoint = multiplyMV(box.transform, glm::vec4(getPointOnRay(q, tmin), 1.0f));
-        normal = glm::normalize(multiplyMV(box.invTranspose, glm::vec4(tmin_n, 0.0f)));
-        return glm::length(r.origin - intersectionPoint);
+        return tmin;
     }
     return -1;
 }
@@ -129,8 +117,7 @@ __host__ __device__ float boxIntersectionTest(Geom& box, Ray& r,
  * @param outside            Output param for whether the ray came from outside.
  * @return                   Ray parameter `t` value. -1 if no intersection.
  */
-__host__ __device__ float sphereIntersectionTest(Geom& sphere, Ray& r,
-        glm::vec3 &intersectionPoint, glm::vec3 &normal, bool &outside) {
+__host__ __device__ float sphereIntersectionTest(const Geom& sphere, const Ray& r) {
     float radius = .5;
 
     glm::vec3 ro = multiplyMV(sphere.inverseTransform, glm::vec4(r.origin, 1.0f));
@@ -156,21 +143,44 @@ __host__ __device__ float sphereIntersectionTest(Geom& sphere, Ray& r,
         return -1;
     } else if (t1 > 0 && t2 > 0) {
         t = min(t1, t2);
-        outside = true;
     } else {
         t = max(t1, t2);
-        outside = false;
     }
 
-    glm::vec3 objspaceIntersection = getPointOnRay(rt, t);
+    return t;
+}
 
-    intersectionPoint = multiplyMV(sphere.transform, glm::vec4(objspaceIntersection, 1.f));
-    normal = glm::normalize(multiplyMV(sphere.invTranspose, glm::vec4(objspaceIntersection, 0.f)));
-    if (!outside) {
-        normal = -normal;
+__host__ __device__ glm::vec3 getBoxNormal(const glm::vec3& p) {
+    const glm::vec3 absP = glm::abs(p);
+    if (absP.x >= absP.y && absP.x >= absP.z) {
+        return glm::vec3(p.x < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f);
     }
+    if (absP.y >= absP.z) {
+        return glm::vec3(0.0f, p.y < 0.0f ? -1.0f : 1.0f, 0.0f);
+    }
+    return glm::vec3(0.0f, 0.0f, p.z < 0.0f ? -1.0f : 1.0f);
+}
 
-    return glm::length(r.origin - intersectionPoint);
+__host__ __device__ void resolveBoxHitData(const Geom& geom, const Ray& ray, float t,
+                                           Vec3& pointWS, Vec3& normalWS) {
+    Ray q;
+    q.origin = multiplyMV1(geom.inverseTransform, ray.origin);
+    q.direction = glm::normalize(multiplyMV0(geom.inverseTransform, ray.direction));
+
+    const Vec3 pointOS = getPointOnRay(q, t);
+    pointWS = multiplyMV1(geom.transform, pointOS);
+    normalWS = glm::normalize(multiplyMV0(geom.invTranspose, getBoxNormal(pointOS)));
+}
+
+__host__ __device__ void resolveSphereHitData(const Geom& geom, const Ray& ray, float t,
+                                              Vec3& pointWS, Vec3& normalWS) {
+    Ray q;
+    q.origin = multiplyMV1(geom.inverseTransform, ray.origin);
+    q.direction = glm::normalize(multiplyMV0(geom.inverseTransform, ray.direction));
+
+    const Vec3 pointOS = getPointOnRay(q, t);
+    pointWS = multiplyMV1(geom.transform, pointOS);
+    normalWS = glm::normalize(multiplyMV0(geom.invTranspose, pointOS));
 }
 
 /**
@@ -268,9 +278,8 @@ __host__ __device__ void computeFaceInfo(const PrimData& md, const Primitive& m,
 /**
  * Test intersection between a ray and a mesh
  */
-__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, Primitive* prims, const PrimData& md, const Ray& ray, ShadeableIntersection& intersection){
-
-    Vec3 ptWS = getPointOnRay(ray, intersection.t);
+__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, Primitive* prims,
+                                              const PrimData& md, const Ray& ray, Hit& hit) {
 
     // Move ray into object space
     Ray r = ray;
@@ -279,11 +288,14 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
     r.inv_dir = 1.0f / r.direction;
 
     glm::vec3 bary;
-    glm::vec3& hitBary = intersection.hit.bary;
-
-    // Get the current closest distance in object space
-    hitBary.z = intersection.hit.geomId < 0 ? FLT_MAX : 
-      glm::length(r.origin - multiplyMV1(geom.inverseTransform, ptWS));
+    glm::vec3 bestBary;
+    int bestPrimId = -1;
+    int bestFaceId = -1;
+    float closestObjectT = FLT_MAX;
+    if (hit.t > 0.0f) {
+      const Vec3 pointWS = getPointOnRay(ray, hit.t);
+      closestObjectT = glm::length(r.origin - multiplyMV1(geom.inverseTransform, pointWS));
+    }
 
     for (int primId = mesh.prim_offset; primId < mesh.prim_offset + mesh.prim_count; ++primId) {
 
@@ -304,7 +316,7 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
         do {
           binInfo = md.bins[bo + bin];
 
-          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z) && bary.z < hitBary.z) {
+          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z) && bary.z < closestObjectT) {
             if (binInfo.childIndex != -1)  // check if has more children
               for (int i = binInfo.childIndex; i < binInfo.childIndex + 8; ++i) {
                 *stackPtr++ = i;  // push children bins to stack
@@ -312,10 +324,11 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
             else if (binInfo.startIndex >= 0) { 
               for (int b = binInfo.startIndex; b < binInfo.endIndex; ++b) {
                 int faceIdx = md.binFaces[m.bf_offset + b];
-                if (intersectFace(md, m, r, faceIdx, bary) && bary.z < hitBary.z) {
-                  intersection.hit.primId = primId;
-                  intersection.hit.faceId = faceIdx;
-                  intersection.hit.bary = bary;
+                if (intersectFace(md, m, r, faceIdx, bary) && bary.z < closestObjectT) {
+                  bestPrimId = primId;
+                  bestFaceId = faceIdx;
+                  bestBary = bary;
+                  closestObjectT = bary.z;
                 }
               }
             }
@@ -334,34 +347,23 @@ __host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh
         // Test intersection on all triangles in the mesh
         int numFaces = m.count / 3;
         for (int i = 0; i < numFaces; ++i) {
-          if (intersectFace(md, m, r, i, bary) && bary.z < hitBary.z) {
-            intersection.hit.primId = primId;
-            intersection.hit.faceId = i;
-            intersection.hit.bary = bary;
+          if (intersectFace(md, m, r, i, bary) && bary.z < closestObjectT) {
+            bestPrimId = primId;
+            bestFaceId = i;
+            bestBary = bary;
+            closestObjectT = bary.z;
           }
         }
       }
     }
 
-    // TODO: Reduce divergence. Maybe move everything below to a new kernel after compaction?
-    if (intersection.hit.primId >= 0) {
-
-      const Primitive& m = prims[intersection.hit.primId];
-
-      computeFaceInfo(md, m, intersection.hit.faceId, intersection.hit.bary,
-        intersection.surfaceNormal, intersection.uv, intersection.tangent);
-
-      intersection.surfaceNormal = glm::normalize(
-        multiplyMV0(geom.invTranspose, intersection.surfaceNormal));
-      intersection.tangent = glm::vec4(
-        glm::normalize(multiplyMV0(geom.invTranspose, glm::vec3(intersection.tangent))), 
-        intersection.tangent.w);
-
-      intersection.materialId = m.mat_id;
-
-      // Calculate intersection distance in world space
-      intersection.t = glm::length(ray.origin - multiplyMV1(geom.transform, getPointOnRay(r, intersection.hit.bary.z)));
-
+    if (bestPrimId >= 0) {
+      hit.meshId = geom.meshid;
+      hit.primId = bestPrimId;
+      hit.faceId = bestFaceId;
+      hit.bary = bestBary;
+      const Vec3 pointWS = multiplyMV1(geom.transform, getPointOnRay(r, closestObjectT));
+      hit.t = glm::length(ray.origin - pointWS);
       return true;
     }
 
