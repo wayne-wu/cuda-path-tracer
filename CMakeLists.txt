@@ -74,34 +74,44 @@ set(GLM_ROOT_DIR "external")
 find_package(GLM REQUIRED)
 include_directories(${GLM_INCLUDE_DIRS})
 include_directories(${OptiX_INCLUDE_DIRS})
+include_directories(
+    imgui
+    src/app
+    src/core
+    src/geometry
+    src/renderer
+    src/renderer/denoise
+    src/renderer/gpu
+    src/scene
+    )
 
 set(headers
-    src/main.h
-    src/image.h
-    src/interactions.h
-    src/intersections.h
-    src/glslUtility.hpp
-    src/octree.h
-    src/OptiXDenoiser.h
-    src/OptiXDenoiserUtil.h
-    src/optixCheck.h
-    src/pathtrace.h
-    src/scene.h
-    src/sceneStructs.h
-    src/preview.h
-    src/utilities.h
+    src/app/main.h
+    src/app/preview.h
+    src/core/glslUtility.hpp
+    src/core/image.h
+    src/core/utilities.h
+    src/geometry/interactions.h
+    src/geometry/intersections.h
+    src/geometry/octree.h
+    src/renderer/denoise/OptiXDenoiser.h
+    src/renderer/denoise/OptiXDenoiserUtil.h
+    src/renderer/denoise/optixCheck.h
+    src/renderer/pathtrace.h
+    src/scene/scene.h
+    src/scene/sceneStructs.h
     )
 
 set(sources
-    src/main.cpp
-    src/stb.cpp
-    src/image.cpp
-    src/glslUtility.cpp
-    src/octree.cpp
-    src/pathtrace.cu
-    src/scene.cpp
-    src/preview.cpp
-    src/utilities.cpp
+    src/app/main.cpp
+    src/app/preview.cpp
+    src/core/glslUtility.cpp
+    src/core/image.cpp
+    src/core/stb.cpp
+    src/core/utilities.cpp
+    src/geometry/octree.cpp
+    src/renderer/pathtrace.cu
+    src/scene/scene.cpp
     )
 
 set(imgui
