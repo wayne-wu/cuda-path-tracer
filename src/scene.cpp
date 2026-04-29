@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>  // c++11
 #include <random>
+#include "stb_image.h"
 #include "utilities.h"
 
 #define TINYGLTF_IMPLEMENTATION
@@ -64,6 +65,9 @@ Scene::Scene(string filename) {
                 cout << " " << endl;
             } else if (strcmp(tokens[0].c_str(), "GLTF") == 0) {
                 loadGLTF(ResolvePathFromSceneFile(filename, tokens[1]), 3.0);
+                cout << " " << endl;
+            } else if (strcmp(tokens[0].c_str(), "ENVIRONMENT") == 0) {
+                loadEnvironment(filename);
                 cout << " " << endl;
             }
         }
@@ -142,6 +146,58 @@ int Scene::loadGeom(string objectid) {
         geoms.push_back(newGeom);
         return 1;
     }
+}
+
+int Scene::loadEnvironment(const std::string& sceneFilename) {
+    cout << "Loading Environment ..." << endl;
+
+    string imagePath;
+    string line;
+    utilityCore::safeGetline(fp_in, line);
+    while (!line.empty() && fp_in.good()) {
+        vector<string> tokens = utilityCore::tokenizeString(line);
+        if (tokens.size() >= 2) {
+            if (strcmp(tokens[0].c_str(), "FILE") == 0) {
+                imagePath = ResolvePathFromSceneFile(sceneFilename, tokens[1]);
+            } else if (strcmp(tokens[0].c_str(), "INTENSITY") == 0) {
+                environment.intensity = atof(tokens[1].c_str());
+            } else if (strcmp(tokens[0].c_str(), "ROTATION") == 0) {
+                environment.rotation = atof(tokens[1].c_str()) * PI / 180.0f;
+            }
+        }
+
+        utilityCore::safeGetline(fp_in, line);
+    }
+
+    if (imagePath.empty()) {
+        cout << "ERROR: ENVIRONMENT requires FILE" << endl;
+        return -1;
+    }
+
+    int width = 0;
+    int height = 0;
+    int components = 0;
+    float* image = stbi_loadf(imagePath.c_str(), &width, &height, &components, 4);
+    if (image == nullptr) {
+        cout << "ERROR: Failed to load environment map " << imagePath << endl;
+        return -1;
+    }
+
+    environment.width = width;
+    environment.height = height;
+    environment.enabled = true;
+    environment.pixels.resize(width * height);
+    for (int i = 0; i < width * height; ++i) {
+        environment.pixels[i] = glm::vec4(
+            image[4 * i + 0],
+            image[4 * i + 1],
+            image[4 * i + 2],
+            image[4 * i + 3]);
+    }
+
+    stbi_image_free(image);
+    cout << "Loaded environment map " << imagePath << " (" << width << "x" << height << ")" << endl;
+    return 1;
 }
 
 int Scene::loadCamera() {

@@ -129,6 +129,15 @@ struct Texture {
   int size;
 };
 
+struct EnvironmentMap {
+  int width = 0;
+  int height = 0;
+  float intensity = 1.0f;
+  float rotation = 0.0f;
+  bool enabled = false;
+  std::vector<glm::vec4> pixels;
+};
+
 struct TextureInfo {
   int index = -1;
   int texCoord;

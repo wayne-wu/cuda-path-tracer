@@ -118,6 +118,8 @@ static Hit * dev_hits = NULL;
 static cudaTextureObject_t * dev_texObjs = NULL;
 static std::vector<cudaArray_t> dev_texArrays;
 static std::vector<cudaTextureObject_t> texObjs;
+static cudaArray_t dev_envArray = NULL;
+static cudaTextureObject_t dev_envTexObj = 0;
 
 // Mesh Data for the GPU
 static PrimData dev_prim_data;
@@ -217,8 +219,8 @@ void textureInit(const Texture& tex, int i) {
     // to by src, including padding), we dont have any padding
     // const size_t spitch = tex.width * sizeof(unsigned char);
     // Copy texture image in host memory to device memory
-    cudaMemcpyToArray(dev_texArrays[i], 0, 0, tex.image, tex.width * tex.height * tex.components * sizeof(unsigned char), cudaMemcpyHostToDevice);
-
+    cudaMemcpy2DToArray(dev_texArrays[i], 0, 0, tex.image, tex.width * tex.components * sizeof(unsigned char), tex.width * tex.components * sizeof(unsigned char), tex.height, cudaMemcpyHostToDevice);
+    
     // Specify texture
     struct cudaResourceDesc resDesc;
     memset(&resDesc, 0, sizeof(resDesc));
@@ -240,6 +242,40 @@ void textureInit(const Texture& tex, int i) {
     checkCUDAError("textureInit failed");
 
     texObjs.push_back(texObj);
+}
+
+void environmentTextureInit(const EnvironmentMap& env) {
+    if (!env.enabled || env.pixels.empty()) {
+        return;
+    }
+
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<float4>();
+    cudaMallocArray(&dev_envArray, &channelDesc, env.width, env.height);
+    cudaMemcpy2DToArray(
+        dev_envArray,
+        0,
+        0,
+        env.pixels.data(),
+        env.width * sizeof(glm::vec4),
+        env.width * sizeof(glm::vec4),
+        env.height,
+        cudaMemcpyHostToDevice);
+
+    struct cudaResourceDesc resDesc;
+    memset(&resDesc, 0, sizeof(resDesc));
+    resDesc.resType = cudaResourceTypeArray;
+    resDesc.res.array.array = dev_envArray;
+
+    struct cudaTextureDesc texDesc;
+    memset(&texDesc, 0, sizeof(texDesc));
+    texDesc.addressMode[0] = cudaAddressModeWrap;
+    texDesc.addressMode[1] = cudaAddressModeClamp;
+    texDesc.filterMode = cudaFilterModeLinear;
+    texDesc.readMode = cudaReadModeElementType;
+    texDesc.normalizedCoords = 1;
+
+    cudaCreateTextureObject(&dev_envTexObj, &resDesc, &texDesc, NULL);
+    checkCUDAError("environmentTextureInit failed");
 }
 
 void pathtraceInit(Scene *scene) {
@@ -278,6 +314,7 @@ void pathtraceInit(Scene *scene) {
     dev_texArrays.resize(scene->textures.size());
     for (int i = 0; i < scene->textures.size(); i++)
       textureInit(scene->textures[i], i);
+    environmentTextureInit(scene->environment);
 
 #if OCTREE
     mallocAndCopy<Bin>(dev_prim_data.bins, scene->bins);
@@ -322,6 +359,12 @@ void pathtraceFree() {
     cudaFree(dev_intersections);
     cudaFree(dev_hits);
     cudaFree(dev_texObjs);
+    if (dev_envTexObj) {
+        cudaDestroyTextureObject(dev_envTexObj);
+    }
+    if (dev_envArray) {
+        cudaFreeArray(dev_envArray);
+    }
 
     cudaFree(dev_gBuffer);
     cudaFree(dev_denoised_image);
@@ -336,6 +379,8 @@ void pathtraceFree() {
     dev_intersections = NULL;
     dev_hits = NULL;
     dev_texObjs = NULL;
+    dev_envTexObj = 0;
+    dev_envArray = NULL;
     dev_gBuffer = NULL;
     dev_denoised_image = NULL;
     hst_scene = NULL;
@@ -549,6 +594,21 @@ __global__ void resolveHitData(
     intersections[path_index] = intersection;
 }
 
+__device__ Color sampleEnvironment(
+    cudaTextureObject_t envTex,
+    const glm::vec3& direction,
+    float intensity,
+    float rotation) {
+  glm::vec3 dir = glm::normalize(direction);
+  float phi = atan2f(dir.z, dir.x) + rotation;
+  float theta = acosf(glm::clamp(dir.y, -1.0f, 1.0f));
+  float u = phi / TWO_PI + 0.5f;
+  float v = theta / PI;
+
+  float4 rgba = tex2D<float4>(envTex, u, v);
+  return intensity * Color(rgba.x, rgba.y, rgba.z);
+}
+
 __global__ void shadeBSDF(
   int iter
   , int num_paths
@@ -556,7 +616,11 @@ __global__ void shadeBSDF(
   , ShadeableIntersection* shadeableIntersections
   , PathSegment* pathSegments
   , Material* materials
-  , cudaTextureObject_t* textures) {
+  , cudaTextureObject_t* textures
+  , cudaTextureObject_t envTexture
+  , bool envEnabled
+  , float envIntensity
+  , float envRotation) {
 
   extern __shared__ Material mats[];
 
@@ -595,64 +659,16 @@ __global__ void shadeBSDF(
       }
     }
     else {
-      pathSegment.color = Color(0.f);
+      if (envEnabled) {
+        pathSegment.color *= sampleEnvironment(envTexture, pathSegment.ray.direction, envIntensity, envRotation);
+      }
+      else {
+        pathSegment.color = Color(0.f);
+      }
       pathSegment.remainingBounces = 0;
     }
 
     pathSegments[idx] = pathSegment;
-  }
-}
-
-// LOOK: "fake" shader demonstrating what you might do with the info in
-// a ShadeableIntersection, as well as how to use thrust's random number
-// generator. Observe that since the thrust random number generator basically
-// adds "noise" to the iteration, the image should start off noisy and get
-// cleaner as more iterations are computed.
-//
-// Note that this shader does NOT do a BSDF evaluation!
-// Your shaders should handle that - this can allow techniques such as
-// bump mapping.
-__global__ void shadeFakeMaterial (
-      int iter
-    , int num_paths
-    , ShadeableIntersection * shadeableIntersections
-    , PathSegment * pathSegments
-    , Material * materials
-    )
-{
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < num_paths)
-  {
-    ShadeableIntersection intersection = shadeableIntersections[idx];
-    if (intersection.t > 0.0f) { // if the intersection exists...
-      // Set up the RNG
-      // LOOK: this is how you use thrust's RNG! Please look at
-      // makeSeededRandomEngine as well.
-      thrust::default_random_engine rng = makeSeededRandomEngine(iter, idx, 0);
-      thrust::uniform_real_distribution<float> u01(0, 1);
-
-      Material material = materials[intersection.materialId];
-      glm::vec3 materialColor = material.color;
-
-      // If the material indicates that the object was a light, "light" the ray
-      if (material.emittance > 0.0f) {
-        pathSegments[idx].color *= (materialColor * material.emittance);
-      }
-      // Otherwise, do some pseudo-lighting computation. This is actually more
-      // like what you would expect from shading in a rasterizer like OpenGL.
-      // TODO: replace this! you should be able to start with basically a one-liner
-      else {
-        float lightTerm = glm::dot(intersection.surfaceNormal, glm::vec3(0.0f, 1.0f, 0.0f));
-        pathSegments[idx].color *= (materialColor * lightTerm) * 0.3f + ((1.0f - intersection.t * 0.02f) * materialColor) * 0.7f;
-        pathSegments[idx].color *= u01(rng); // apply some noise because why not
-      }
-    // If there was no intersection, color the ray black.
-    // Lots of renderers use 4 channel color, RGBA, where A = alpha, often
-    // used for opacity, in which case they can indicate "no opacity".
-    // This can be useful for post-processing and image compositing.
-    } else {
-      pathSegments[idx].color = Color(0.0f);
-    }
   }
 }
 
@@ -913,14 +929,6 @@ void pathtrace(int frame, int iter, bool denoise)
       cudaEventRecord(startEvent);
 #endif
 
-      // TODO:
-      // --- Shading Stage ---
-      // Shade path segments based on intersections and generate new rays by
-      // evaluating the BSDF.
-      // Start off with just a big kernel that handles all the different
-      // materials you have in the scenefile.
-      // TODO: compare between directly shading the path segments and shading
-      // path segments that have been reshuffled to be contiguous in memory.
       int matSize = hst_scene->materials.size();
       shadeBSDF <<<numblocksPathSegmentTracing, blockSize1d, matSize*sizeof(Material), stream1>>> (
         iter,
@@ -929,7 +937,11 @@ void pathtrace(int frame, int iter, bool denoise)
         intersections,
         dev_paths,
         dev_materials,
-        dev_texObjs
+        dev_texObjs,
+        dev_envTexObj,
+        hst_scene->environment.enabled,
+        hst_scene->environment.intensity,
+        hst_scene->environment.rotation
         );
       checkCUDAError("shadeBSDF failed");
 
