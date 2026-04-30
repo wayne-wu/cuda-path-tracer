@@ -35,6 +35,12 @@ find_package(CUDA 10 REQUIRED)
 include(${CMAKE_MODULE_PATH}/CUDAComputesList.cmake)
 find_package(OptiX REQUIRED)
 
+set(CUDA_CCCL_INCLUDE_DIR "${CUDA_TOOLKIT_ROOT_DIR}/include/cccl")
+include_directories(${CUDA_TOOLKIT_INCLUDE})
+if(EXISTS "${CUDA_CCCL_INCLUDE_DIR}")
+    include_directories(${CUDA_CCCL_INCLUDE_DIR})
+endif()
+
 list(APPEND CUDA_NVCC_FLAGS ${CUDA_GENERATE_CODE})
 list(APPEND CUDA_NVCC_FLAGS_DEBUG "-g -G")
 list(APPEND CUDA_NVCC_FLAGS "--std=c++17")
@@ -42,6 +48,7 @@ set(CUDA_VERBOSE_BUILD ON)
 
 if(WIN32)
     # Set up include and lib paths
+    add_definitions(-DNOMINMAX -DWIN32_LEAN_AND_MEAN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:preprocessor")
     set(CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER} CACHE FILEPATH "Host side compiler used by NVCC" FORCE)
     include_directories(external/include/ImGuiFileDialog/dirent)
@@ -76,8 +83,8 @@ include_directories(${GLM_INCLUDE_DIRS})
 include_directories(${OptiX_INCLUDE_DIRS})
 include_directories(
     imgui
+    src
     src/app
-    src/core
     src/geometry
     src/renderer
     src/renderer/denoise
@@ -90,16 +97,29 @@ set(headers
     src/app/preview.h
     src/core/glslUtility.hpp
     src/core/image.h
+    src/core/math.h
+    src/core/types.h
     src/core/utilities.h
     src/geometry/interactions.h
     src/geometry/intersections.h
     src/geometry/octree.h
+    src/renderer/PathTracer.h
+    src/renderer/PathTracerKernels.cuh
+    src/renderer/RenderSettings.h
+    src/renderer/RenderState.h
     src/renderer/denoise/OptiXDenoiser.h
     src/renderer/denoise/OptiXDenoiserUtil.h
     src/renderer/denoise/optixCheck.h
-    src/renderer/pathtrace.h
-    src/scene/scene.h
-    src/scene/sceneStructs.h
+    src/renderer/gpu/CudaBuffer.h
+    src/renderer/gpu/CudaCheck.h
+    src/renderer/gpu/CudaTexture2D.h
+    src/renderer/gpu/GpuFramebuffer.h
+    src/renderer/gpu/GpuScene.h
+    src/scene/GpuSceneTypes.h
+    src/scene/GltfSceneLoader.h
+    src/scene/RenderScene.h
+    src/scene/SceneLoader.h
+    src/scene/TextSceneLoader.h
     )
 
 set(sources
@@ -110,8 +130,12 @@ set(sources
     src/core/stb.cpp
     src/core/utilities.cpp
     src/geometry/octree.cpp
-    src/renderer/pathtrace.cu
-    src/scene/scene.cpp
+    src/renderer/PathTracer.cpp
+    src/renderer/PathTracerKernels.cu
+    src/renderer/gpu/GpuFramebuffer.cu
+    src/renderer/gpu/GpuScene.cu
+    src/scene/GltfSceneLoader.cpp
+    src/scene/TextSceneLoader.cpp
     )
 
 set(imgui

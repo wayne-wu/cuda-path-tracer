@@ -116,6 +116,11 @@ void initCuda() {
     atexit(cleanupCuda);
 }
 
+void initPathTracer() {
+    pathTracer = make_unique<PathTracer>();
+    pathTracer->initialize();
+}
+
 void initPBO() {
     // set up vertex data parameter
     int num_texels = width * height;
@@ -178,7 +183,7 @@ bool init() {
     // Initialize other stuff
     initVAO();
     initTextures();
-    initCuda();
+    initPathTracer();
     initPBO();
     GLuint passthroughProgram = initShader();
 
@@ -232,7 +237,13 @@ void drawGui(int windowWidth, int windowHeight) {
     cudaMemGetInfo(&free, &total);
     ImGui::Text("Free Mem: %.1f/%.1f GB", free/1000000000.0f, total/1000000000.0f);
 
-    ImGui::Text("Triangles: %d", scene ? scene->numTriangles : 0);
+    int triangleCount = 0;
+    if (scene) {
+      for (const RenderMesh& mesh : scene->meshes) {
+        triangleCount += static_cast<int>(mesh.indices.size() / 3);
+      }
+    }
+    ImGui::Text("Triangles: %d", triangleCount);
 
     if (ImGui::CollapsingHeader("Render Settings")) {
       // open Dialog Simple

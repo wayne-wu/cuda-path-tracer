@@ -1,5 +1,6 @@
 #include "main.h"
 #include "preview.h"
+#include "scene/TextSceneLoader.h"
 #include <cstring>
 
 static std::string startTimeString;
@@ -33,12 +34,54 @@ float zoom, theta, phi;
 glm::vec3 cameraPosition;
 glm::vec3 ogLookAt; // for recentering the camera
 
-Scene *scene;
-RenderState *renderState;
+std::unique_ptr<RenderScene> scene;
+std::unique_ptr<PathTracer> pathTracer;
 int iteration;
 
 int width = 800;
 int height = 800;
+
+struct CameraBasis {
+    glm::vec3 view;
+    glm::vec3 right;
+    glm::vec3 up;
+};
+
+static CameraBasis computeCameraBasis(const RenderCamera& camera) {
+    CameraBasis basis = {};
+
+    glm::vec3 view = camera.lookAt - camera.position;
+    if (glm::length(view) == 0.0f) {
+        view = glm::vec3(0.0f, 0.0f, -1.0f);
+    }
+    basis.view = glm::normalize(view);
+
+    glm::vec3 up = camera.up;
+    if (glm::length(up) == 0.0f) {
+        up = glm::vec3(0.0f, 1.0f, 0.0f);
+    }
+    up = glm::normalize(up);
+
+    glm::vec3 right = glm::cross(basis.view, up);
+    if (glm::length(right) == 0.0f) {
+        right = glm::cross(basis.view, glm::vec3(0.0f, 0.0f, 1.0f));
+    }
+    if (glm::length(right) == 0.0f) {
+        right = glm::vec3(1.0f, 0.0f, 0.0f);
+    }
+
+    basis.right = glm::normalize(right);
+    basis.up = glm::normalize(glm::cross(basis.right, basis.view));
+    return basis;
+}
+
+static int triangleCount(const RenderScene& renderScene) {
+    int count = 0;
+    for (const RenderMesh& mesh : renderScene.meshes) {
+        count += static_cast<int>(mesh.indices.size() / 3);
+    }
+    return count;
+}
 
 //-------------------------------
 //-------------MAIN--------------
@@ -71,25 +114,25 @@ int main(int argc, char** argv) {
     // GLFW main loop
     mainLoop();
 
-    return 0;
+      return 0;
 }
 
 
 void loadScene(string sceneFile) {
     // Load scene file
-    scene = new Scene(sceneFile);
+    TextSceneLoader loader;
+    scene = std::make_unique<RenderScene>(loader.load(sceneFile));
 
     // Set up camera stuff from loaded path tracer settings
     iteration = 0;
-    renderState = &scene->state;
-    Camera &cam = renderState->camera;
+    RenderCamera &cam = scene->camera;
     width = cam.resolution.x;
     height = cam.resolution.y;
+    // ui_iterations = static_cast<int>(scene->settings.iterations);
+    startupIterations = ui_iterations;
 
-    glm::vec3 view = cam.view;
-    glm::vec3 up = cam.up;
-    glm::vec3 right = glm::cross(view, up);
-    up = glm::cross(right, view);
+    CameraBasis basis = computeCameraBasis(cam);
+    glm::vec3 view = basis.view;
 
     cameraPosition = cam.position;
 
@@ -106,19 +149,23 @@ void loadScene(string sceneFile) {
 }
 
 void saveImage() {
-    float samples = ui_denoise ? 1 : iteration;
+    const bool useDenoised = pathTracer && pathTracer->hasDenoisedImage();
+    const int samples = iteration > 0 ? iteration : 1;
+
     // output image file
     image img(width, height);
+    std::vector<glm::vec3> pixels;
+    pathTracer->copyImageToHost(pixels, useDenoised);
 
     for (int x = 0; x < width; x++) {
         for (int y = 0; y < height; y++) {
             int index = x + (y * width);
-            glm::vec3 pix = renderState->image[index];
-            img.setPixel(width - 1 - x, y, glm::vec3(pix) / samples);
+            glm::vec3 pix = index < pixels.size() ? pixels[index] : glm::vec3(0.0f);
+            img.setPixel(width - 1 - x, y, pix);
         }
     }
 
-    std::string filename = renderState->imageName;
+    std::string filename = scene ? scene->settings.imageName : std::string("render");
     std::ostringstream ss;
     ss << filename << "." << startTimeString << "." << samples << "samp";
     filename = ss.str();
@@ -134,10 +181,9 @@ void runCuda() {
       int oldWidth = width;
       int oldHeight = height;
 
-      pathtraceFree();
-
-      if (scene)
-        delete scene;  // clean up CPU-side scene data
+      if (pathTracer) {
+        pathTracer->shutdown();
+      }
 
       loadScene(ui_sceneFile);
       if (width != oldWidth || height != oldHeight) {
@@ -157,27 +203,29 @@ void runCuda() {
 
     if (camchanged) {
         iteration = 0;
-        Camera &cam = renderState->camera;
+        RenderCamera &cam = scene->camera;
         cameraPosition.x = zoom * sin(phi) * sin(theta);
         cameraPosition.y = zoom * cos(theta);
         cameraPosition.z = zoom * cos(phi) * sin(theta);
 
-        cam.view = -glm::normalize(cameraPosition);
-        glm::vec3 v = cam.view;
+        glm::vec3 v = -glm::normalize(cameraPosition);
         glm::vec3 u = glm::vec3(0, 1, 0);//glm::normalize(cam.up);
         glm::vec3 r = glm::cross(v, u);
         cam.up = glm::cross(r, v);
-        cam.right = r;
 
         cam.position = cameraPosition;
         cameraPosition += cam.lookAt;
         cam.position = cameraPosition;
         camchanged = false;
-      }
+    }
 
     if (iteration == 0) {
-        pathtraceFree();
-        pathtraceInit(scene);
+        pathTracer->shutdown();
+        pathTracer->initialize();
+        pathTracer->setScene(*scene);
+        pathTracer->setCamera(scene->camera);
+        pathTracer->setTraceDepth(scene->settings.traceDepth);
+        pathTracer->resize(scene->camera.resolution.x, scene->camera.resolution.y);
     }
 
     // Map OpenGL buffer object for writing from CUDA on a single GPU
@@ -194,14 +242,16 @@ void runCuda() {
       // execute the kernel
       int frame = 0;
       denoise = ui_denoise && iteration == ui_iterations;  // only denoise after the last iteration
-      pathtrace(frame, iteration, denoise);
+      pathTracer->setCamera(scene->camera);
+      pathTracer->setTraceDepth(scene->settings.traceDepth);
+      pathTracer->renderSample(denoise);
     }
 
     if (ui_showGbuffer) {
-      showGBuffer(pbo_dptr, ui_GbufferMode);
+      pathTracer->copyGBufferToPbo(pbo_dptr, ui_GbufferMode);
     }
     else {
-      showImage(pbo_dptr, iteration, denoise);
+      pathTracer->copyImageToPbo(pbo_dptr, denoise);
     }
 
     // unmap buffer object
@@ -209,7 +259,7 @@ void runCuda() {
 
     if (ui_saveAndExit) {
       saveImage();
-      pathtraceFree();
+      pathTracer->shutdown();
       cudaDeviceReset();
       exit(EXIT_SUCCESS);
     }
@@ -236,8 +286,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
         break;
       case GLFW_KEY_SPACE:
         camchanged = true;
-        renderState = &scene->state;
-        Camera &cam = renderState->camera;
+        RenderCamera &cam = scene->camera;
         cam.lookAt = ogLookAt;
         break;
       }
@@ -265,12 +314,12 @@ void mousePositionCallback(GLFWwindow* window, double xpos, double ypos) {
     camchanged = true;
   }
   else if (middleMousePressed) {
-    renderState = &scene->state;
-    Camera &cam = renderState->camera;
-    glm::vec3 forward = cam.view;
+    RenderCamera &cam = scene->camera;
+    CameraBasis basis = computeCameraBasis(cam);
+    glm::vec3 forward = basis.view;
     forward.y = 0.0f;
     forward = glm::normalize(forward);
-    glm::vec3 right = cam.right;
+    glm::vec3 right = basis.right;
     right.y = 0.0f;
     right = glm::normalize(right);
 

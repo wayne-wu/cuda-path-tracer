@@ -1,33 +1,20 @@
 #pragma once
 
+#include <cstdint>
+
 #include <glm/glm.hpp>
 #include <glm/gtx/intersect.hpp>
 
-#include "sceneStructs.h"
-#include "utilities.h"
+#include "core/utilities.h"
+#include "scene/GpuSceneTypes.h"
 
-/**
- * Swap the given two vectors
- */
-__host__ __device__ inline void swapVal(float& v1, float& v2) {
-  float tmp = v1;
-  v1 = v2;
-  v2 = tmp;
-}
+using namespace gpu;
 
-/**
- * Interpolate a vector given three vectors and a barycentric coordinate (uv)
- * TODO: Fast lerp: https://developer.nvidia.com/blog/lerp-faster-cuda/ 
- */
-template<class T>
-__host__ __device__ inline void lerp(T& p, const T& a, 
-  const T& b, const T& c, const float u, const float v) {
+template <class T>
+__host__ __device__ inline void lerp(T& p, const T& a, const T& b, const T& c, float u, float v) {
     p = (1.0f - u - v) * a + u * b + v * c;
 }
 
-/**
- * Handy-dandy hash function that provides seeds for random number generation.
- */
 __host__ __device__ inline unsigned int utilhash(unsigned int a) {
     a = (a + 0x7ed55d16) + (a << 12);
     a = (a ^ 0xc761c23c) ^ (a >> 19);
@@ -38,352 +25,279 @@ __host__ __device__ inline unsigned int utilhash(unsigned int a) {
     return a;
 }
 
-// CHECKITOUT
-/**
- * Compute a point at parameter value `t` on ray `r`.
- * Falls slightly short so that it doesn't intersect the object it's hitting.
- */
-__host__ __device__ glm::vec3 getPointOnRay(Ray r, float t) {
-    return r.origin + (t - .0001f) * glm::normalize(r.direction);
+__host__ __device__ inline Vec3 getPointOnRay(const Ray& r, float t) {
+    return r.origin + (t - 0.0001f) * glm::normalize(r.direction);
 }
 
-/**
- * Multiplies a mat4 and a vec4 and returns a vec3 clipped from the vec4.
- */
-__host__ __device__ glm::vec3 multiplyMV(glm::mat4 m, glm::vec4 v) {
-    return glm::vec3(m * v);
+__host__ __device__ inline Vec3 multiplyMV1(const Mat4& m, const Vec3& v) {
+    return Vec3(m * Vec4(v, 1.0f));
 }
 
-/**
- * Multiplies a mat4 and a vec3 and returns a vec3 clipped from the vec4.
- */
-__host__ __device__ glm::vec3 multiplyMV1(glm::mat4 m, glm::vec3 v) {
-  return glm::vec3(m * glm::vec4(v, 1.f));
+__host__ __device__ inline Vec3 multiplyMV0(const Mat4& m, const Vec3& v) {
+    return Vec3(m * Vec4(v, 0.0f));
 }
 
-__host__ __device__ glm::vec3 multiplyMV0(glm::mat4 m, glm::vec3 v) {
-  return glm::vec3(m * glm::vec4(v, 0.f));
+__host__ __device__ inline Vec3 getBoxNormal(const Vec3& p) {
+    const Vec3 absP = glm::abs(p);
+    if (absP.x >= absP.y && absP.x >= absP.z) {
+        return Vec3(p.x < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f);
+    }
+    if (absP.y >= absP.z) {
+        return Vec3(0.0f, p.y < 0.0f ? -1.0f : 1.0f, 0.0f);
+    }
+    return Vec3(0.0f, 0.0f, p.z < 0.0f ? -1.0f : 1.0f);
 }
 
-// CHECKITOUT
-/**
- * Test intersection between a ray and a transformed cube. Untransformed,
- * the cube ranges from -0.5 to 0.5 in each axis and is centered at the origin.
- *
- * @param intersectionPoint  Output parameter for point of intersection.
- * @param normal             Output parameter for surface normal.
- * @param outside            Output param for whether the ray came from outside.
- * @return                   Ray parameter `t` value. -1 if no intersection.
- */
-__host__ __device__ float boxIntersectionTest(const Geom& box, const Ray& r) {
-    Ray q;
-    q.origin    =                multiplyMV(box.inverseTransform, glm::vec4(r.origin   , 1.0f));
-    q.direction = glm::normalize(multiplyMV(box.inverseTransform, glm::vec4(r.direction, 0.0f)));
+__host__ __device__ inline bool intersectBox(const Ray& r, const Vec3& vMin, const Vec3& vMax, float& t) {
+    const Vec3 tmin = (vMin - r.origin) * r.inv_dir;
+    const Vec3 tmax = (vMax - r.origin) * r.inv_dir;
+    const Vec3 t1 = glm::min(tmin, tmax);
+    const Vec3 t2 = glm::max(tmin, tmax);
 
+    t = glm::max(glm::max(t1.x, t1.y), t1.z);
+    return t <= glm::min(glm::min(t2.x, t2.y), t2.z);
+}
+
+__device__ inline Ray getRayOS(const gpu::Instance& instance, const Ray& rayWS) {
+    Ray rayOS;
+    rayOS.origin = multiplyMV1(instance.inverseTransform, rayWS.origin);
+    rayOS.direction = glm::normalize(multiplyMV0(instance.inverseTransform, rayWS.direction));
+    rayOS.inv_dir = 1.0f / rayOS.direction;
+    return rayOS;
+}
+
+__device__ inline Vec3 makePerpendicularTangent(const Vec3& normal) {
+    const Vec3 n = glm::normalize(normal);
+    const Vec3 reference = glm::abs(n.y) < 0.999f ? Vec3(0.0f, 1.0f, 0.0f) : Vec3(1.0f, 0.0f, 0.0f);
+    return glm::normalize(glm::cross(reference, n));
+}
+
+__device__ inline Vec4 makeAnalyticTangent(const Vec3& normalOS, const Vec3& pointOS,
+                                           gpu::GeometryType geometryType) {
+    if (geometryType == gpu::GeometryType::Sphere) {
+        Vec3 tangent(-pointOS.z, 0.0f, pointOS.x);
+        if (glm::dot(tangent, tangent) > 1e-8f) {
+            return Vec4(glm::normalize(tangent), 1.0f);
+        }
+    }
+    return Vec4(makePerpendicularTangent(normalOS), 1.0f);
+}
+
+__device__ inline Vec4 transformTangentToWorld(const gpu::Instance& instance, const Vec3& normalWS,
+                                               const Vec4& tangentOS) {
+    Vec3 tangentWS = multiplyMV0(instance.transform, Vec3(tangentOS));
+    tangentWS = tangentWS - normalWS * glm::dot(normalWS, tangentWS);
+    if (glm::dot(tangentWS, tangentWS) <= 1e-8f) {
+        tangentWS = makePerpendicularTangent(normalWS);
+    }
+    return Vec4(glm::normalize(tangentWS), tangentOS.w);
+}
+
+__device__ inline float boxIntersectionTest(const Ray& rayOS) {
     float tmin = -1e38f;
     float tmax = 1e38f;
     for (int xyz = 0; xyz < 3; ++xyz) {
-        float qdxyz = q.direction[xyz];
-        /*if (glm::abs(qdxyz) > 0.00001f)*/ {
-            float t1 = (-0.5f - q.origin[xyz]) / qdxyz;
-            float t2 = (+0.5f - q.origin[xyz]) / qdxyz;
-            float ta = glm::min(t1, t2);
-            float tb = glm::max(t1, t2);
-            if (ta > 0 && ta > tmin) {
-                tmin = ta;
-            }
-            if (tb < tmax) {
-                tmax = tb;
-            }
+        const float t1 = (-0.5f - rayOS.origin[xyz]) / rayOS.direction[xyz];
+        const float t2 = (+0.5f - rayOS.origin[xyz]) / rayOS.direction[xyz];
+        const float ta = glm::min(t1, t2);
+        const float tb = glm::max(t1, t2);
+        if (ta > 0.0f && ta > tmin) {
+            tmin = ta;
+        }
+        if (tb < tmax) {
+            tmax = tb;
         }
     }
 
-    if (tmax >= tmin && tmax > 0) {
-        if (tmin <= 0) {
-            tmin = tmax;
-        }
-        return tmin;
+    if (tmax >= tmin && tmax > 0.0f) {
+        return tmin <= 0.0f ? tmax : tmin;
     }
-    return -1;
+    return -1.0f;
 }
 
-// CHECKITOUT
-/**
- * Test intersection between a ray and a transformed sphere. Untransformed,
- * the sphere always has radius 0.5 and is centered at the origin.
- *
- * @param intersectionPoint  Output parameter for point of intersection.
- * @param normal             Output parameter for surface normal.
- * @param outside            Output param for whether the ray came from outside.
- * @return                   Ray parameter `t` value. -1 if no intersection.
- */
-__host__ __device__ float sphereIntersectionTest(const Geom& sphere, const Ray& r) {
-    float radius = .5;
-
-    glm::vec3 ro = multiplyMV(sphere.inverseTransform, glm::vec4(r.origin, 1.0f));
-    glm::vec3 rd = glm::normalize(multiplyMV(sphere.inverseTransform, glm::vec4(r.direction, 0.0f)));
-
-    Ray rt;
-    rt.origin = ro;
-    rt.direction = rd;
-
-    float vDotDirection = glm::dot(rt.origin, rt.direction);
-    float radicand = vDotDirection * vDotDirection - (glm::dot(rt.origin, rt.origin) - powf(radius, 2));
-    if (radicand < 0) {
-        return -1;
+__device__ inline float sphereIntersectionTest(const Ray& rayOS) {
+    const float radius = 0.5f;
+    const float vDotDirection = glm::dot(rayOS.origin, rayOS.direction);
+    const float radicand = vDotDirection * vDotDirection - (glm::dot(rayOS.origin, rayOS.origin) - radius * radius);
+    if (radicand < 0.0f) {
+        return -1.0f;
     }
 
-    float squareRoot = sqrt(radicand);
-    float firstTerm = -vDotDirection;
-    float t1 = firstTerm + squareRoot;
-    float t2 = firstTerm - squareRoot;
+    const float squareRoot = sqrtf(radicand);
+    const float t1 = -vDotDirection + squareRoot;
+    const float t2 = -vDotDirection - squareRoot;
 
-    float t = 0;
-    if (t1 < 0 && t2 < 0) {
-        return -1;
-    } else if (t1 > 0 && t2 > 0) {
-        t = min(t1, t2);
-    } else {
-        t = max(t1, t2);
+    if (t1 < 0.0f && t2 < 0.0f) {
+        return -1.0f;
     }
-
-    return t;
-}
-
-__host__ __device__ glm::vec3 getBoxNormal(const glm::vec3& p) {
-    const glm::vec3 absP = glm::abs(p);
-    if (absP.x >= absP.y && absP.x >= absP.z) {
-        return glm::vec3(p.x < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f);
+    if (t1 > 0.0f && t2 > 0.0f) {
+        return glm::min(t1, t2);
     }
-    if (absP.y >= absP.z) {
-        return glm::vec3(0.0f, p.y < 0.0f ? -1.0f : 1.0f, 0.0f);
-    }
-    return glm::vec3(0.0f, 0.0f, p.z < 0.0f ? -1.0f : 1.0f);
+    return glm::max(t1, t2);
 }
 
-__host__ __device__ void resolveBoxHitData(const Geom& geom, const Ray& ray, float t,
-                                           Vec3& pointWS, Vec3& normalWS) {
-    Ray q;
-    q.origin = multiplyMV1(geom.inverseTransform, ray.origin);
-    q.direction = glm::normalize(multiplyMV0(geom.inverseTransform, ray.direction));
-
-    const Vec3 pointOS = getPointOnRay(q, t);
-    pointWS = multiplyMV1(geom.transform, pointOS);
-    normalWS = glm::normalize(multiplyMV0(geom.invTranspose, getBoxNormal(pointOS)));
+__device__ inline bool intersectFace(const gpu::PrimitiveDataView& data, const gpu::Primitive& primitive,
+                                     const Ray& ray, int faceIndex, Vec3& bary) {
+    const gpu::Triangle& triangle = data.triangles[primitive.face_offset + faceIndex];
+    return glm::intersectRayTriangle(ray.origin, ray.direction, triangle.v0, triangle.v1, triangle.v2, bary);
 }
 
-__host__ __device__ void resolveSphereHitData(const Geom& geom, const Ray& ray, float t,
-                                              Vec3& pointWS, Vec3& normalWS) {
-    Ray q;
-    q.origin = multiplyMV1(geom.inverseTransform, ray.origin);
-    q.direction = glm::normalize(multiplyMV0(geom.inverseTransform, ray.direction));
+__device__ inline float meshIntersectionTest(const Ray& rayOS, const gpu::Mesh& mesh,
+                                             const gpu::SceneView& scene, Hit& hit) {
+    float minT = -1.0f;
+    for (int primIndex = 0; primIndex < mesh.prim_count; ++primIndex) {
+        const int primitiveIndex = mesh.prim_offset + primIndex;
+        const gpu::Primitive& primitive = scene.primData.primitives[primitiveIndex];
 
-    const Vec3 pointOS = getPointOnRay(q, t);
-    pointWS = multiplyMV1(geom.transform, pointOS);
-    normalWS = glm::normalize(multiplyMV0(geom.invTranspose, pointOS));
-}
+        if (primitive.bin_offset >= 0 && scene.primData.bins != nullptr && scene.primData.binFaces != nullptr) {
+            const Offset binOffset = primitive.bin_offset;
+            int stack[64];
+            int* stackPtr = stack;
+            *stackPtr++ = -1;
+            int binIndex = 0;
 
-/**
- * Test intersection between a ray and a box given the min and max points (bbox)
- * TODO: https://tavianator.com/2022/ray_box_boundary.html 
- */
-__host__ __device__ bool intersectBox(const Ray& r, const glm::vec3& v_min, const glm::vec3& v_max, float& t) {
+            do {
+                const gpu::Bin& bin = scene.primData.bins[binOffset + binIndex];
+                float binT = -1.0f;
+                if (intersectBox(rayOS, bin.bbox_min, bin.bbox_max, binT) &&
+                    (minT < 0.0f || binT < minT || binT < 0.0f)) {
+                    if (bin.childIndex != -1) {
+                        int childBins[8];
+                        float childTs[8];
+                        int childCount = 0;
 
-    const glm::vec3& ro = r.origin;
-    const glm::vec3& n = r.inv_dir;
+                        for (int childIndex = bin.childIndex; childIndex < bin.childIndex + 8; ++childIndex) {
+                            const gpu::Bin& child = scene.primData.bins[binOffset + childIndex];
+                            float childT = -1.0f;
+                            if (intersectBox(rayOS, child.bbox_min, child.bbox_max, childT) &&
+                                (minT < 0.0f || childT < minT || childT < 0.0f)) {
+                                int insertPos = childCount;
+                                while (insertPos > 0 && childTs[insertPos - 1] < childT) {
+                                    childTs[insertPos] = childTs[insertPos - 1];
+                                    childBins[insertPos] = childBins[insertPos - 1];
+                                    --insertPos;
+                                }
+                                childTs[insertPos] = childT;
+                                childBins[insertPos] = childIndex;
+                                ++childCount;
+                            }
+                        }
 
-    Vec3 tmin = (v_min - ro) * n;
-    Vec3 tmax = (v_max - ro) * n;
-    Vec3 t1 = min(tmin, tmax);
-    Vec3 t2 = max(tmin, tmax);
+                        for (int i = 0; i < childCount; ++i) {
+                            *stackPtr++ = childBins[i];
+                        }
+                    }
+                    else if (bin.startIndex >= 0) {
+                        for (int b = bin.startIndex; b < bin.endIndex; ++b) {
+                            const int face = scene.primData.binFaces[primitive.bf_offset + b];
+                            Vec3 bary;
+                            if (!intersectFace(scene.primData, primitive, rayOS, face, bary)) {
+                                continue;
+                            }
 
-    // tNear;
-    t = max(max(t1.x, t1.y), t1.z);
-    
-    return t <= min(min(t2.x, t2.y), t2.z);
-}
-
-__host__ __device__ bool intersectFace(const PrimData& md, const Primitive& m, const Ray& r,
-                              int faceIdx, Vec3& bary) {
-  const Triangle& tri = md.triangles[m.face_offset + faceIdx];
-  return glm::intersectRayTriangle(r.origin, r.direction, tri.v0, tri.v1, tri.v2, bary);
-}
-
-/*
-Compute the info needed for shading for a face/triangle.
-*/
-__host__ __device__ void computeFaceInfo(const PrimData& md, const Primitive& m, const int faceId, const Vec3& bary, 
-                                         Vec3& normal, Vec2& uv, Vec4& tangent) {
-  
-  const int& hitFace = faceId;
-  int f0 = md.indices[m.i_offset + 3 * hitFace];
-  int f1 = md.indices[m.i_offset + 3 * hitFace + 1];
-  int f2 = md.indices[m.i_offset + 3 * hitFace + 2];
-
-  glm::vec3 v0, v1, v2;
-  v0 = md.vertices[m.v_offset + f0];
-  v1 = md.vertices[m.v_offset + f1];
-  v2 = md.vertices[m.v_offset + f2];
-
-  // Interpolate Normal
-  if (m.n_offset >= 0) {
-    lerp<glm::vec3>(normal,
-      md.normals[m.n_offset + f0],
-      md.normals[m.n_offset + f1],
-      md.normals[m.n_offset + f2], bary.x, bary.y);
-  }
-
-  // Interpolate UV
-  glm::vec2 uv0, uv1, uv2;
-  if (m.uv_offset >= 0) {
-    uv0 = md.uvs[m.uv_offset + f0];
-    uv1 = md.uvs[m.uv_offset + f1];
-    uv2 = md.uvs[m.uv_offset + f2];
-    lerp<glm::vec2>(uv, uv0, uv1, uv2, bary.x, bary.y);
-  }
-
-  // Interpolate Tangent
-  if (m.t_offset >= 0) {
-    lerp<glm::vec4>(tangent,
-      md.tangents[m.t_offset + f0],
-      md.tangents[m.t_offset + f1],
-      md.tangents[m.t_offset + f2],
-      bary.x, bary.y);
-  }
-  else {
-    // Calculate tangent vector: 
-    // https://www.cs.upc.edu/~virtual/G/1.%20Teoria/06.%20Textures/Tangent%20Space%20Calculation.pdf
-
-    glm::vec3 dp1 = v1 - v0;
-    glm::vec3 dp2 = v2 - v0;
-    glm::vec2 du1 = uv1 - uv0;
-    glm::vec2 du2 = uv2 - uv0;
-
-    float r = 1.0F / (du1.x * du2.y - du2.x * du1.y);
-    glm::vec3 sdir((du2.y * dp1.x - du1.y * dp2.x) * r, (du2.y * dp1.y - du1.y * dp2.y) * r,
-      (du2.y * dp1.z - du1.y * dp2.z) * r);
-    glm::vec3 tdir((du1.x * dp2.x - du2.x * dp1.x) * r, (du1.x * dp2.y - du2.x * dp1.y) * r,
-      (du1.x * dp2.z - du2.x * dp1.z) * r);
-
-    tangent = glm::vec4(
-      glm::normalize(sdir - normal * glm::dot(normal, sdir)),
-      glm::dot(glm::cross(normal, sdir), tdir) < 0.f ? -1.f : 1.f);
-  }
-}
-
-
-/**
- * Test intersection between a ray and a mesh
- */
-__host__ __device__ bool meshIntersectionTest(const Geom& geom, const Mesh& mesh, Primitive* prims,
-                                              const PrimData& md, const Ray& ray, Hit& hit) {
-
-    // Move ray into object space
-    Ray r = ray;
-    r.origin = multiplyMV1(geom.inverseTransform, ray.origin);
-    r.direction = glm::normalize(multiplyMV0(geom.inverseTransform, ray.direction));
-    r.inv_dir = 1.0f / r.direction;
-
-    glm::vec3 bary;
-    glm::vec3 bestBary;
-    int bestPrimId = -1;
-    int bestFaceId = -1;
-    float closestObjectT = FLT_MAX;
-    if (hit.t > 0.0f) {
-      const Vec3 pointWS = getPointOnRay(ray, hit.t);
-      closestObjectT = glm::length(r.origin - multiplyMV1(geom.inverseTransform, pointWS));
-    }
-
-    for (int primId = mesh.prim_offset; primId < mesh.prim_offset + mesh.prim_count; ++primId) {
-
-      const Primitive& m = prims[primId];
-
-      if (m.bin_offset >= 0) {
-        
-        Bin binInfo;
-        const Offset& bo = m.bin_offset;
-
-        // Use octree for intersection testing
-        int stack[64];
-        int* stackPtr = stack;
-        *stackPtr++ = -1;
-
-        int bin = 0;
-
-        do {
-          binInfo = md.bins[bo + bin];
-
-          if (intersectBox(r, binInfo.bbox_min, binInfo.bbox_max, bary.z) && bary.z < closestObjectT) {
-            if (binInfo.childIndex != -1) {  // check if has more children
-              int childBins[8];
-              float childTs[8];
-              int childCount = 0;
-
-              for (int i = binInfo.childIndex; i < binInfo.childIndex + 8; ++i) {
-                const Bin& child = md.bins[bo + i];
-                float childT;
-                if (intersectBox(r, child.bbox_min, child.bbox_max, childT) && childT < closestObjectT) {
-                  int insertPos = childCount;
-                  while (insertPos > 0 && childTs[insertPos - 1] < childT) {
-                    childTs[insertPos] = childTs[insertPos - 1];
-                    childBins[insertPos] = childBins[insertPos - 1];
-                    --insertPos;
-                  }
-                  childTs[insertPos] = childT;
-                  childBins[insertPos] = i;
-                  ++childCount;
+                            const float localT = bary.z;
+                            if (localT > 0.0f && (minT < 0.0f || localT < minT)) {
+                                minT = localT;
+                                hit.primId = primitiveIndex;
+                                hit.faceId = face;
+                                hit.bary = bary;
+                                hit.t = localT;
+                            }
+                        }
+                    }
                 }
-              }
 
-              for (int i = 0; i < childCount; ++i) {
-                *stackPtr++ = childBins[i];  // push farthest first so nearest is popped next
-              }
-            }
-            else if (binInfo.startIndex >= 0) { 
-              for (int b = binInfo.startIndex; b < binInfo.endIndex; ++b) {
-                int faceIdx = md.binFaces[m.bf_offset + b];
-                if (intersectFace(md, m, r, faceIdx, bary) && bary.z < closestObjectT) {
-                  bestPrimId = primId;
-                  bestFaceId = faceIdx;
-                  bestBary = bary;
-                  closestObjectT = bary.z;
-                }
-              }
-            }
-          }
-
-          bin = *--stackPtr;  // pop from stack
-
-        } while (bin >= 0);
-      }
-      else
-      {
-        // Try intersecting with the bbox first
-        if (!intersectBox(r, m.bbox_min, m.bbox_max, bary.z))
-          continue;
-
-        // Test intersection on all triangles in the mesh
-        int numFaces = m.count / 3;
-        for (int i = 0; i < numFaces; ++i) {
-          if (intersectFace(md, m, r, i, bary) && bary.z < closestObjectT) {
-            bestPrimId = primId;
-            bestFaceId = i;
-            bestBary = bary;
-            closestObjectT = bary.z;
-          }
+                binIndex = *--stackPtr;
+            } while (binIndex >= 0);
         }
-      }
+        else {
+            float boxT = -1.0f;
+            if (!intersectBox(rayOS, primitive.bbox_min, primitive.bbox_max, boxT) ||
+                (minT >= 0.0f && boxT >= minT && boxT >= 0.0f)) {
+                continue;
+            }
+
+            for (int face = 0; face < primitive.count / 3; ++face) {
+                Vec3 bary;
+                if (!intersectFace(scene.primData, primitive, rayOS, face, bary)) {
+                    continue;
+                }
+
+                const float localT = bary.z;
+                if (localT > 0.0f && (minT < 0.0f || localT < minT)) {
+                    minT = localT;
+                    hit.primId = primitiveIndex;
+                    hit.faceId = face;
+                    hit.bary = bary;
+                    hit.t = localT;
+                }
+            }
+        }
+    }
+    return minT;
+}
+
+__device__ inline void computeFaceInfo(const gpu::PrimitiveDataView& data, const gpu::Primitive& primitive,
+                                       int faceId, const Vec3& bary, Vec3& normal, Vec2& uv, Vec4& tangent) {
+    const uint32_t f0 = data.indices[primitive.i_offset + 3 * faceId + 0];
+    const uint32_t f1 = data.indices[primitive.i_offset + 3 * faceId + 1];
+    const uint32_t f2 = data.indices[primitive.i_offset + 3 * faceId + 2];
+
+    if (primitive.n_offset >= 0) {
+        lerp(normal,
+             data.normals[primitive.n_offset + f0],
+             data.normals[primitive.n_offset + f1],
+             data.normals[primitive.n_offset + f2],
+             bary.x,
+             bary.y);
     }
 
-    if (bestPrimId >= 0) {
-      hit.meshId = geom.meshid;
-      hit.primId = bestPrimId;
-      hit.faceId = bestFaceId;
-      hit.bary = bestBary;
-      const Vec3 pointWS = multiplyMV1(geom.transform, getPointOnRay(r, closestObjectT));
-      hit.t = glm::length(ray.origin - pointWS);
-      return true;
+    Vec2 uv0(0.0f);
+    Vec2 uv1(0.0f);
+    Vec2 uv2(0.0f);
+    if (primitive.uv_offset >= 0) {
+        uv0 = data.uvs[primitive.uv_offset + f0];
+        uv1 = data.uvs[primitive.uv_offset + f1];
+        uv2 = data.uvs[primitive.uv_offset + f2];
+        lerp(uv, uv0, uv1, uv2, bary.x, bary.y);
     }
 
-    return false;
+    if (primitive.t_offset >= 0) {
+        lerp(tangent,
+             data.tangents[primitive.t_offset + f0],
+             data.tangents[primitive.t_offset + f1],
+             data.tangents[primitive.t_offset + f2],
+             bary.x,
+             bary.y);
+        return;
+    }
+
+    const Vec3 v0 = data.vertices[primitive.v_offset + f0];
+    const Vec3 v1 = data.vertices[primitive.v_offset + f1];
+    const Vec3 v2 = data.vertices[primitive.v_offset + f2];
+    if (primitive.n_offset < 0) {
+        normal = glm::normalize(glm::cross(v1 - v0, v2 - v0));
+    }
+
+    const Vec3 dp1 = v1 - v0;
+    const Vec3 dp2 = v2 - v0;
+    const Vec2 du1 = uv1 - uv0;
+    const Vec2 du2 = uv2 - uv0;
+    const float denom = du1.x * du2.y - du2.x * du1.y;
+    if (glm::abs(denom) <= 1e-8f) {
+        tangent = Vec4(makePerpendicularTangent(normal), 1.0f);
+        return;
+    }
+
+    const float r = 1.0f / denom;
+    const Vec3 sdir((du2.y * dp1.x - du1.y * dp2.x) * r,
+                    (du2.y * dp1.y - du1.y * dp2.y) * r,
+                    (du2.y * dp1.z - du1.y * dp2.z) * r);
+    const Vec3 tdir((du1.x * dp2.x - du2.x * dp1.x) * r,
+                    (du1.x * dp2.y - du2.x * dp1.y) * r,
+                    (du1.x * dp2.z - du2.x * dp1.z) * r);
+
+    tangent = Vec4(
+        glm::normalize(sdir - normal * glm::dot(normal, sdir)),
+        glm::dot(glm::cross(normal, sdir), tdir) < 0.0f ? -1.0f : 1.0f);
 }

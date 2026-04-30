@@ -1,6 +1,7 @@
 
 #include <queue>
 #include <algorithm>
+#include <cassert>
 #include <numeric>
 #include <iostream>
 #include <unordered_set>
@@ -8,13 +9,13 @@
 #include "octree.h"
 
 
-Octree::Octree(const Primitive& prim, const Vertices& vertices, const Indices& indices) : 
-  _prim(prim), _vertices(vertices), _indices(indices) {
+Octree::Octree(const RenderMesh& mesh, const glm::vec3& bboxMin, const glm::vec3& bboxMax) :
+  _mesh(mesh), _bboxMin(bboxMin), _bboxMax(bboxMax) {
   
-  Bin root;
+  RenderBin root;
   root.depth = 0;
-  root.bbox_max = _prim.bbox_max;
-  root.bbox_min = _prim.bbox_min;
+  root.bboxMax = _bboxMax;
+  root.bboxMin = _bboxMin;
   root.childIndex = -1;
 
   bins.push_back(root);
@@ -22,36 +23,36 @@ Octree::Octree(const Primitive& prim, const Vertices& vertices, const Indices& i
   divide();
 }
 
-void Octree::project(vector<Vec3> points, Vec3 axis, float& minVal, float& maxVal) {
+void Octree::project(const std::vector<glm::vec3>& points, const glm::vec3& axis, float& minVal, float& maxVal) {
 
   minVal = INFINITY;
   maxVal = -INFINITY;
   for (auto& p : points)
   {
     float val = glm::dot(axis, p);
-    minVal = min(minVal , val);
-    maxVal = max(maxVal, val);
+    minVal = std::min(minVal , val);
+    maxVal = std::max(maxVal, val);
   }
 }
 
 /*
 Adapted from: https://stackoverflow.com/questions/17458562/efficient-aabb-triangle-intersection-in-c-sharp
 */
-bool Octree::intersectAABBTriangle(Vec3& bboxMin, Vec3& bboxMax, vector<Vec3>& v) {
+bool Octree::intersectAABBTriangle(const glm::vec3& bboxMin, const glm::vec3& bboxMax, std::vector<glm::vec3>& v) {
 
-  vector<Vec3> boxVertices = {
+  std::vector<glm::vec3> boxVertices = {
     bboxMin,
-    Vec3(bboxMin.x, bboxMin.y, bboxMax.z),
-    Vec3(bboxMin.x, bboxMax.y, bboxMax.z),
-    Vec3(bboxMin.x, bboxMax.y, bboxMin.z),
-    Vec3(bboxMax.x, bboxMax.y, bboxMin.z),
-    Vec3(bboxMax.x, bboxMin.y, bboxMax.z),
-    Vec3(bboxMax.x, bboxMin.y, bboxMin.z),
+    glm::vec3(bboxMin.x, bboxMin.y, bboxMax.z),
+    glm::vec3(bboxMin.x, bboxMax.y, bboxMax.z),
+    glm::vec3(bboxMin.x, bboxMax.y, bboxMin.z),
+    glm::vec3(bboxMax.x, bboxMax.y, bboxMin.z),
+    glm::vec3(bboxMax.x, bboxMin.y, bboxMax.z),
+    glm::vec3(bboxMax.x, bboxMin.y, bboxMin.z),
     bboxMax,
   };
 
-  vector<Vec3> boxNormals = {
-    Vec3(1,0,0), Vec3(0,1,0), Vec3(0,0,1)
+  std::vector<glm::vec3> boxNormals = {
+    glm::vec3(1,0,0), glm::vec3(0,1,0), glm::vec3(0,0,1)
   };
 
   float min, max;
@@ -62,11 +63,11 @@ bool Octree::intersectAABBTriangle(Vec3& bboxMin, Vec3& bboxMax, vector<Vec3>& v
       return false;
   }
 
-  vector<Vec3> edges = {
+  std::vector<glm::vec3> edges = {
     v[0] - v[1], v[1] - v[2], v[2] - v[0]
   };
 
-  Vec3 normal = -glm::normalize(glm::cross(v[0]-v[1], v[2]-v[1]));
+  glm::vec3 normal = -glm::normalize(glm::cross(v[0]-v[1], v[2]-v[1]));
 
   float triangleOffset = glm::dot(normal, v[1]);
   project(boxVertices, normal, min, max);
@@ -76,7 +77,7 @@ bool Octree::intersectAABBTriangle(Vec3& bboxMin, Vec3& bboxMax, vector<Vec3>& v
   float min2, max2;
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
-      Vec3 a = glm::cross(edges[i], boxNormals[j]);
+      glm::vec3 a = glm::cross(edges[i], boxNormals[j]);
       project(boxVertices, a, min, max);
       project(v, a, min2, max2);
       if (max < min2 || min > max2)
@@ -89,15 +90,15 @@ bool Octree::intersectAABBTriangle(Vec3& bboxMin, Vec3& bboxMax, vector<Vec3>& v
 
 void Octree::divide() {
 
-  size_t numFaces = _prim.count / 3;
+  size_t numFaces = _mesh.indices.size() / 3;
 
-  vector<vector<int>> binFaces;
+  std::vector<std::vector<int>> binFaces;
 
-  vector<int> faces(numFaces);
+  std::vector<int> faces(numFaces);
   std::iota(faces.begin(), faces.end(), 0);
   binFaces.push_back(faces);
 
-  queue<int> divideQueue;
+  std::queue<int> divideQueue;
   divideQueue.push(0);
 
   glm::vec3 binMin, binMax, cellSize;
@@ -106,9 +107,9 @@ void Octree::divide() {
 
     int b = divideQueue.front(); divideQueue.pop();
 
-    Bin bin = bins[b];
+    RenderBin bin = bins[b];
 
-    cellSize = (bin.bbox_max - bin.bbox_min) / 2.0f;
+    cellSize = (bin.bboxMax - bin.bboxMin) / 2.0f;
 
     for (int i = 0; i < 2; ++i) {
       for (int j = 0; j < 2; ++j) {
@@ -119,25 +120,25 @@ void Octree::divide() {
           if (i == 0 && j == 0 && k == 0)
             bins[b].childIndex = newBinIdx;
 
-          Bin newBin;
+          RenderBin newBin;
           newBin.depth = bin.depth + 1;
           newBin.childIndex = -1;
-          newBin.bbox_min = bin.bbox_min + Vec3(i, j, k) * cellSize;
-          newBin.bbox_max = newBin.bbox_min + cellSize;
+          newBin.bboxMin = bin.bboxMin + glm::vec3(i, j, k) * cellSize;
+          newBin.bboxMax = newBin.bboxMin + cellSize;
           bins.push_back(newBin);
 
-          vector<int> facesInBin;
+          std::vector<int> facesInBin;
 
           for (auto& faceIdx : binFaces[b]) {
             // Checks if the triangle intersects with the bin
             // Even if the three points are not inside it
-            int n = _prim.i_offset + 3 * faceIdx;
+            int n = 3 * faceIdx;
 
-            vector<Vec3> v;
+            std::vector<glm::vec3> v;
             for (int idx = n; idx < n+3; ++idx)
-              v.push_back(_vertices[_prim.v_offset + _indices[idx]]);
+              v.push_back(_mesh.positions[_mesh.indices[idx]]);
 
-            if (intersectAABBTriangle(newBin.bbox_min, newBin.bbox_max, v))
+            if (intersectAABBTriangle(newBin.bboxMin, newBin.bboxMax, v))
               facesInBin.push_back(faceIdx);
           }
 
@@ -145,7 +146,7 @@ void Octree::divide() {
 
           // Check if cell needs further division
           // std::cout << "Length " << glm::distance(newBin.bbox_max, newBin.bbox_min) << endl;
-          if (glm::distance(newBin.bbox_max, newBin.bbox_min) > minCellsize && 
+          if (glm::distance(newBin.bboxMax, newBin.bboxMin) > minCellsize && 
             facesInBin.size() > minBinCount && 
             newBin.depth < maxDepth)
             divideQueue.push(newBinIdx);
@@ -169,7 +170,7 @@ void Octree::divide() {
     }
   }
 
-  unordered_set<int> binnedFaces(faceBins.begin(), faceBins.end());
+  std::unordered_set<int> binnedFaces(faceBins.begin(), faceBins.end());
   // Assert that all faces are part of a bin
   assert(binnedFaces.size() == numFaces);
 
