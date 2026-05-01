@@ -63,11 +63,12 @@ void sendImageToPBO(uchar4* pbo, glm::ivec2 resolution, const float4* image) {
     if (x < resolution.x && y < resolution.y) {
         int index = x + (y * resolution.x);
         const float4 pix = image[index];
+        const Color srgb = linearToSrgb(Color(pix.x, pix.y, pix.z));
 
         glm::ivec3 color;
-        color.x = glm::clamp(static_cast<int>(pix.x * 255.0f), 0, 255);
-        color.y = glm::clamp(static_cast<int>(pix.y * 255.0f), 0, 255);
-        color.z = glm::clamp(static_cast<int>(pix.z * 255.0f), 0, 255);
+        color.x = glm::clamp(static_cast<int>(srgb.x * 255.0f), 0, 255);
+        color.y = glm::clamp(static_cast<int>(srgb.y * 255.0f), 0, 255);
+        color.z = glm::clamp(static_cast<int>(srgb.z * 255.0f), 0, 255);
 
         // Each thread writes one pixel location in the texture (textel)
         pbo[index].w = 0;
@@ -324,11 +325,12 @@ void scatterRay(
     const gpu::Material& material,
     cudaTextureObject_t* textures,
     thrust::default_random_engine& rng) {
+
     const glm::vec3 intersect = getPointOnRay(pathSegment.ray, intersection.t);
 
-    Color albedo = material.baseColor;
+    glm::vec3 albedo = material.baseColor;
     if (material.baseColorTexture.index >= 0) {
-        albedo = sampleTexture(textures[material.baseColorTexture.index], intersection.uv);
+        albedo *= srgbToLinear(sampleTexture(textures[material.baseColorTexture.index], intersection.uv));
     }
 
     float metallic = material.metallic;
@@ -339,34 +341,65 @@ void scatterRay(
         roughness *= pbr.g;
     }
 
-    glm::vec3 normal = intersection.surfaceNormal;
+    const glm::vec3 V = -glm::normalize(pathSegment.ray.direction);
+    glm::vec3 N = intersection.surfaceNormal;
     if (material.normalTexture.index >= 0) {
         glm::vec3 tangentSpaceNormal = sampleTexture(textures[material.normalTexture.index], intersection.uv);
         tangentSpaceNormal = tangentSpaceNormal * 2.0f - 1.0f;
         tangentSpaceNormal.x *= material.normalScale;
         tangentSpaceNormal.y *= material.normalScale;
-        normalMapping(normal, glm::normalize(tangentSpaceNormal), intersection.tangent);
+        normalMapping(N, glm::normalize(tangentSpaceNormal), intersection.tangent);
     }
+
+    if (glm::dot(V, N) <= 0.0f) {
+        N = intersection.surfaceNormal;
+    }
+
+    glm::vec3 L;
+
+    // TODO: Remove once we don't use txt scenes
+    if (!material.useRoughSpecular && metallic >= 1.0f && roughness <= 0.0f) {
+        L = glm::normalize(glm::reflect(pathSegment.ray.direction, N));
+        pathSegment.ray.origin = intersect + L * 0.0001f;
+        pathSegment.ray.direction = L;
+        pathSegment.color *= albedo;
+        return;
+    }
+
+    roughness = max(roughness, 0.04f);
 
     thrust::uniform_real_distribution<float> u01(0, 1);
-    glm::vec3 newDir;
-    Color color;
 
-    if (u01(rng) < metallic) {
-        const glm::vec3 reflect = glm::reflect(pathSegment.ray.direction, normal);
-        newDir = material.useRoughSpecular
-            ? calculateImperfectSpecularDirection(normal, reflect, intersection.tangent, rng, roughness)
-            : reflect;
-        color = metallic * albedo;
+    float w_spec = glm::mix(0.25f, 0.9f, metallic);
+    float w_diff = 1.0f - w_spec;
+
+    if (u01(rng) < w_spec) {
+        const glm::vec3 H = sampleGGXHalfVector(N, roughness, rng);
+        L = glm::normalize(glm::reflect(-V, H));
     }
     else {
-        newDir = calculateRandomDirectionInHemisphere(normal, rng);
-        color = (1.0f - metallic) * albedo;
+        L = sampleCosineHemisphere(N, rng);
     }
 
-    pathSegment.ray.origin = intersect + newDir * 0.0001f;
-    pathSegment.ray.direction = glm::normalize(newDir);
-    pathSegment.color *= color;
+    float cosTheta = glm::dot(L, N);
+    if (cosTheta <= 0.0f) {
+        pathSegment.color = Color(0.0f);
+        pathSegment.remainingBounces = 0;
+        return;
+    }
+
+    Color f = evaluateBRDF(N, V, L, albedo, metallic, roughness);
+    float pdf = w_diff * diffusePDF(cosTheta) + w_spec * microfacetPDF(N, V, L, roughness);
+    if (pdf <= 1e-8f) {
+        pathSegment.color = Color(0.0f);
+        pathSegment.remainingBounces = 0;
+        return;
+    }
+
+    pathSegment.ray.origin = intersect + L * 0.0001f;
+    pathSegment.ray.direction = L;
+
+    pathSegment.color *= f * cosTheta / pdf;
 }
 
 __global__
@@ -399,7 +432,7 @@ void shadeBSDF(
 
             Color emissiveColor = material.emissiveColor * material.emissiveStrength;
             if (material.emissiveTexture.index >= 0) {
-                emissiveColor *= sampleTexture(textures[material.emissiveTexture.index], intersection.uv);
+                emissiveColor *= srgbToLinear(sampleTexture(textures[material.emissiveTexture.index], intersection.uv));
             }
 
             // If the material indicates that the object was a light, "light" the ray.
@@ -460,7 +493,7 @@ void generateGBuffer(
             albedo = material.baseColor;
         }
         else {
-            albedo = sampleTexture(textures[material.baseColorTexture.index], intersection.uv);
+            albedo = material.baseColor * srgbToLinear(sampleTexture(textures[material.baseColorTexture.index], intersection.uv));
         }
         gBuffer.albedo[idx] = make_float4(albedo.x, albedo.y, albedo.z, 1.0f);
     }

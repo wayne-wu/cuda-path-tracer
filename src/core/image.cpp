@@ -1,8 +1,22 @@
 #include <iostream>
+#include <cmath>
 #include <string>
 #include <stb_image_write.h>
 
 #include "image.h"
+
+namespace {
+
+float linearToSrgb(float c) {
+    c = glm::clamp(c, 0.0f, 1.0f);
+    return c <= 0.0031308f ? 12.92f * c : 1.055f * powf(c, 1.0f / 2.4f) - 0.055f;
+}
+
+glm::vec3 linearToSrgb(const glm::vec3& c) {
+    return glm::vec3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
+}
+
+} // namespace
 
 image::image(int x, int y) :
         xSize(x),
@@ -24,7 +38,7 @@ void image::savePNG(const std::string &baseFilename) {
     for (int y = 0; y < ySize; y++) {
         for (int x = 0; x < xSize; x++) { 
             int i = y * xSize + x;
-            glm::vec3 pix = glm::clamp(pixels[i], glm::vec3(), glm::vec3(1)) * 255.f;
+            glm::vec3 pix = linearToSrgb(pixels[i]) * 255.f;
             bytes[3 * i + 0] = (unsigned char) pix.x;
             bytes[3 * i + 1] = (unsigned char) pix.y;
             bytes[3 * i + 2] = (unsigned char) pix.z;
