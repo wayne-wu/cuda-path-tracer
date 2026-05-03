@@ -1,16 +1,14 @@
 CUDA Path Tracer and Denoiser
 ================
 
-**University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 3**
+![](img/sponza_wide.png)
 
-* Wayne Wu
-  * [LinkedIn](https://www.linkedin.com/in/wayne-wu/), [Personal Website](https://www.wuwayne.com/)
-* Tested on: Windows 10, AMD Ryzen 5 5600X @ 3.70GHz 32GB, RTX 3070 8GB (personal)
-
-## Background
-
-This is a GPU Path Tracer implemented in C++/CUDA with fundamental concepts from Physically-based Rendering (PBR) texts.
-It allows loading GLTF files for meshes and their associated materials and textures.
+This is a GPU Path Tracer implemented in C++/CUDA based on Physically-based Rendering (PBR). The path tracer has the following features:
+* Custom Mesh Loading via glTF
+* Diffuse and Microfacet (GGX) Implementation
+* Environment Map
+* Spatial Acceleration using Octree
+* Denoising using Optix
 
 ## Screenshots
 Duck            |  Damaged Helmet  | Flight Helmet  | Sponza
@@ -74,18 +72,18 @@ Test Scene       |  Time to each iteration
 :-------------------------:|:-------------------------:
 ![](img/firstcachescene.png)   |  ![](img/firstbouncecache.png)
 
+
 ## GLTF Mesh Loading
 In order to render more complex scenes, the system needs to support loading arbitrary mesh robustly.
-As long as the system is sufficiently robust (e.g. able to handle multiple hierarchies), the complexity can be defined by the file format itself thus making the scene more visually interesting. **GLTF** was chosen as the scene description format as it is much more powerful than OBJ, and the fact that I have never worked with GLTF before and thought it would be a good opportunity to understand the specification.
+As long as the system is sufficiently robust (e.g. able to handle multiple hierarchies), the complexity can be defined by the file format itself thus making the scene more visually interesting. **glTF** was chosen as the scene description format as it is much more powerful than OBJ, and the fact that I have never worked with glTF prior to this project and thought it would be a good opportunity to understand the specification.
 
-To support GLTF mesh loading, I used [tinygltf](https://github.com/syoyo/tinygltf) to load in the GLTF file and parsed the data into custom `struct` data defined in `sceneStruct.cpp`. This step is necessary since the tinygltf classes are not GPU-compatible.
-Additionally, in order to not have to deal with passing nested Struct Arrays to the GPU, each mesh vertex data is flattened into its own giant buffer containing the data for **all** meshes. 
-The actual Mesh struct would only store the index offset for each data. This is similar to how GLTF/OpenGL defines VBOs, therefore there is opportunity to make the GLTF to GPU translation more direct.
+To support glTF mesh loading, I used [tinygltf](https://github.com/syoyo/tinygltf) to load in the glTF file and parsed the data into custom `struct` data defined in `sceneStruct.cpp`. This step is necessary since the tinygltf classes are not GPU-compatible.
+Additionally, instead of Array-of-Structs (AoS), the GPU scene data uses Structure-of-Arrays (SoA) to store the geometry data of all meshes in the scene. SoA is more performant than AoS in this case. The actual Mesh struct would only store the index offset for each attribute. This is similar to how glTF/OpenGL defines VBOs, therefore there is opportunity to make the glTF to GPU translation more direct.
 
 ![](img/gltfexample1.png)
 
 ## Metallic-Roughness Model
-In order to support the material definition in GLTF 2.0, the default specular-gloss model needs to be converted to the metallic-roughness model.
+In order to support the material definition in glTF 2.0, the default specular-gloss model needs to be converted to the metallic-roughness model.
 In this implementation, a simplified implementation is used based on the idea of importance sampling.
 
 ### Metallic
@@ -108,7 +106,7 @@ GLTF provides a useful testing scene for different metallic and roughness values
 
 
 ## Texture
-Most GLTF materials use textures instead of hardcoded albedo, metallic-roughness values. Naturally, it is important to implement the ability to load textures with GLTF.
+Most glTF materials use textures instead of hardcoded albedo, metallic-roughness values. Naturally, it is important to implement the ability to load textures with glTF.
 Textures are loaded using `cudaTextureObj` and `cudaArray`, which allows multiple textures to be loaded at once and more optimized texture sampling.
 
 ### Texture Image

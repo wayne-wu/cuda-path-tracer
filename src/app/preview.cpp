@@ -164,7 +164,7 @@ bool init() {
         exit(EXIT_FAILURE);
     }
 
-    window = glfwCreateWindow(width, height, "CIS 565 Path Tracer", NULL, NULL);
+    window = glfwCreateWindow(width, height, "CUDA Path Tracer", NULL, NULL);
     if (!window) {
         glfwTerminate();
         return false;
@@ -296,8 +296,12 @@ void mainLoop() {
         glfwPollEvents();
         runCuda();
 
-        string title = "CIS565 Path Tracer | " + utilityCore::convertIntToString(iteration) + " Iterations";
+        string title = "CUDA Path Tracer | " + utilityCore::convertIntToString(iteration) + " Iterations";
         glfwSetWindowTitle(window, title.c_str());
+
+        int display_w, display_h;
+        glfwGetFramebufferSize(window, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
 
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
         glBindTexture(GL_TEXTURE_2D, displayImage);
@@ -308,8 +312,6 @@ void mainLoop() {
         glDrawElements(GL_TRIANGLES, 6,  GL_UNSIGNED_SHORT, 0);
 
         // Draw imgui
-        int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
         drawGui(display_w, display_h);
 
         glfwSwapBuffers(window);

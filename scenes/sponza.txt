@@ -10,7 +10,7 @@ EMITTANCE   20
 
 // Camera
 CAMERA
-RES         800 800
+RES         1920 1080
 FOVY        45
 ITERATIONS  500
 DEPTH       8

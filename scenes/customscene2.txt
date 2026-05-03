@@ -30,7 +30,7 @@ EMITTANCE   20
 
 // Ground
 MATERIAL 3
-RGB         0.4 0.2 0.2
+RGB         0.3 0.3 0.3
 SPECEX      0
 SPECRGB     0 0 0
 REFL        0
@@ -100,4 +100,4 @@ ROTAT       0 0 0
 SCALE       .01 10 10
 
 
-GLTF ../scenes/models/damagedhelmet/DamagedHelmet.gltf
+GLTF ../scenes/models/suzanne/Suzanne.gltf
